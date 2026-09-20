@@ -1,0 +1,17 @@
+import { Router } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { Business } from '../models/business.model.js';
+import { Counter } from '../models/counter.model.js';
+import { User } from '../models/user.model.js';
+import { env } from '../config/env.js';
+import { requireAuth } from '../middleware/auth.js';
+const router=Router();
+const slugify=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+const nextaccountId=async()=>{const c=await Counter.findOneAndUpdate({key:'accountId'},{$inc:{seq:1}},{upsert:true,new:true,setDefaultsOnInsert:true});return `BT${String(c.seq).padStart(5,'0')}`;};
+const tokenFor=(u:any)=>jwt.sign({sub:String(u._id),businessId:u.businessId?String(u.businessId):undefined,accountId:u.accountId,role:u.role},env.jwtSecret,{expiresIn:'7d'});
+const publicUser=(u:any)=>({id:String(u._id),accountId:u.accountId,name:u.name,email:u.email,businessId:u.businessId?String(u.businessId):undefined,role:u.role});
+router.post('/register',async(req,res,next)=>{try{const{name,email,password,businessName}=req.body||{};if(!name||!email||!password||!businessName)return res.status(400).json({message:'Name, business name, email and password are required.'});if(String(password).length<8)return res.status(400).json({message:'Password must be at least 8 characters.'});const normalized=String(email).toLowerCase().trim();if(await User.exists({email:normalized}))return res.status(409).json({message:'An account already exists with this email.'});let slug=slugify(String(businessName))||'brain-techno-business';if(await Business.exists({slug}))slug=`${slug}-${Date.now().toString().slice(-6)}`;const business=await Business.create({name:String(businessName).trim(),slug});const accountId=await nextaccountId();const user=await User.create({accountId,name:String(name).trim(),email:normalized,passwordHash:await bcrypt.hash(String(password),12),businessId:business._id,role:'owner'});business.ownerId=user._id;await business.save();return res.status(201).json({token:tokenFor(user),user:publicUser(user)});}catch(e){return next(e);}});
+router.post('/login',async(req,res,next)=>{try{const{email,password}=req.body||{};const user=await User.findOne({email:String(email||'').toLowerCase().trim()});if(!user||!await bcrypt.compare(String(password||''),user.passwordHash))return res.status(401).json({message:'Invalid email or password.'});return res.json({token:tokenFor(user),user:publicUser(user)});}catch(e){return next(e);}});
+router.get('/me',requireAuth,async(req,res,next)=>{try{const user=await User.findById(req.auth!.userId);if(!user)return res.status(404).json({message:'User not found.'});return res.json(publicUser(user));}catch(e){return next(e);}});
+export default router;
