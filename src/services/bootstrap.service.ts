@@ -1,15 +1,19 @@
 import bcrypt from 'bcryptjs';
 
-import { Business } from '../models/business.model.js';
-import { Campaign } from '../models/campaign.model.js';
-import { Counter } from '../models/counter.model.js';
-import { Template } from '../models/template.model.js';
-import { User } from '../models/user.model.js';
+import { Business } from '../models/business.model';
+import { Campaign } from '../models/campaign.model';
+import { Counter } from '../models/counter.model';
+import { Template } from '../models/template.model';
+import { User } from '../models/user.model';
 
-import { normalizeLegacyDesign } from '../utils/serialize.js';
+import { normalizeLegacyDesign } from '../utils/serialize';
 
 const ADMIN_EMAIL = 'admin@braintechno.com';
 const ADMIN_PASSWORD = 'admin@braintechno.com';
+
+const ADMIN_MOBILE = '0000000000';
+const ADMIN_BUSINESS_NAME = 'BRAIN TECHNO Admin';
+const ADMIN_BUSINESS_CATEGORY = 'General';
 
 export async function bootstrapDevelopmentData(): Promise<void> {
   /**
@@ -18,53 +22,83 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * ----------------------------------------------------
    */
 
-
-
   let business = await Business.findOne({
-    slug: 'brain-techno-admin',
+    slug: 'brain-techno-admin'
   });
 
   if (!business) {
     business = await Business.create({
-      name: 'BRAIN TECHNO Admin',
+      name: ADMIN_BUSINESS_NAME,
       slug: 'brain-techno-admin',
-      status: 'active',
+      status: 'active'
     });
   }
-
-
-  
 
   /**
    * ----------------------------------------------------
    * 2. ADMIN USER
    * ----------------------------------------------------
    */
+
   const passwordHash = await bcrypt.hash(
     ADMIN_PASSWORD,
-    12,
+    12
   );
 
   let admin = await User.findOne({
-    email: ADMIN_EMAIL,
+    email: ADMIN_EMAIL
   });
 
   if (!admin) {
     admin = await User.create({
       accountId: 0,
-      name: 'BRAIN TECHNO Admin',
+
+      ownerName: 'BRAIN TECHNO Admin',
+
+      mobile: ADMIN_MOBILE,
+
       email: ADMIN_EMAIL,
+
+      businessName: ADMIN_BUSINESS_NAME,
+
+      businessCategory:
+        ADMIN_BUSINESS_CATEGORY,
+
       passwordHash,
+
       businessId: business._id,
-      role: 'admin',
+
+      role: 'admin'
     });
   } else {
     admin.accountId = 0;
-    admin.name = 'BRAIN TECHNO Admin';
-    admin.email = ADMIN_EMAIL;
-    admin.passwordHash = passwordHash;
-    admin.businessId = business._id;
-    admin.role = 'admin';
+
+    admin.ownerName =
+      'BRAIN TECHNO Admin';
+
+    admin.mobile =
+      admin.mobile ||
+      ADMIN_MOBILE;
+
+    admin.email =
+      ADMIN_EMAIL;
+
+    admin.businessName =
+      admin.businessName ||
+      ADMIN_BUSINESS_NAME;
+
+    admin.businessCategory =
+      admin.businessCategory ||
+      ADMIN_BUSINESS_CATEGORY;
+
+    admin.passwordHash =
+      passwordHash;
+
+    admin.businessId =
+      business._id;
+
+    admin.role =
+      'admin';
 
     await admin.save();
   }
@@ -74,8 +108,14 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * 3. SET BUSINESS OWNER
    * ----------------------------------------------------
    */
-  if (!business.ownerId) {
-    business.ownerId = admin._id;
+
+  if (
+    !business.ownerId ||
+    String(business.ownerId) !==
+      String(admin._id)
+  ) {
+    business.ownerId =
+      admin._id;
 
     await business.save();
   }
@@ -84,75 +124,67 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * ----------------------------------------------------
    * 4. FIND CURRENT MAX ACCOUNT ID
    * ----------------------------------------------------
-   *
-   * Example:
-   *
-   * BT00001
-   * BT00002
-   * BT00015
-   *
-   * maxSeq = 15
    */
+
   const existingIds = await User.find({
-    accountId: /^BT\d{5}$/,
+    accountId: /^BT\d{5}$/
   })
     .select('accountId')
     .lean();
 
   const maxSeq = existingIds.reduce(
-    (max: number, user: any) => {
+    (
+      max: number,
+      user
+    ) => {
       const accountId = String(
-        user.accountId || '',
+        user.accountId || ''
       );
 
       const numericValue = Number(
-        accountId.slice(2),
+        accountId.slice(2)
       );
 
       if (
-        Number.isNaN(numericValue)
+        Number.isNaN(
+          numericValue
+        )
       ) {
         return max;
       }
 
       return Math.max(
         max,
-        numericValue,
+        numericValue
       );
     },
-    0,
+    0
   );
 
   /**
    * ----------------------------------------------------
    * 5. INITIALIZE ACCOUNT ID COUNTER
    * ----------------------------------------------------
-   *
-   * IMPORTANT:
-   *
-   * Do not use:
-   *
-   * $max: { seq: maxSeq }
-   * +
-   * $setOnInsert: { seq: maxSeq }
-   *
-   * together because MongoDB throws:
-   *
-   * ConflictingUpdateOperators
    */
-  let accountCounter = await Counter.findOne({
-    key: 'accountId',
-  });
+
+  let accountCounter =
+    await Counter.findOne({
+      key: 'accountId'
+    });
 
   if (!accountCounter) {
-    accountCounter = await Counter.create({
-      key: 'accountId',
-      seq: maxSeq,
-    });
+    accountCounter =
+      await Counter.create({
+        key: 'accountId',
+        seq: maxSeq
+      });
   } else if (
-    Number(accountCounter.seq || 0) < maxSeq
+    Number(
+      accountCounter.seq || 0
+    ) < maxSeq
   ) {
-    accountCounter.seq = maxSeq;
+    accountCounter.seq =
+      maxSeq;
 
     await accountCounter.save();
   }
@@ -162,55 +194,60 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * 6. MIGRATE EXISTING USERS WITHOUT ACCOUNT ID
    * ----------------------------------------------------
    */
-  const usersWithoutaccountId = await User.find({
-    role: {
-      $ne: 'admin',
-    },
-    $or: [
-      {
-        accountId: {
-          $exists: false,
+
+  const usersWithoutAccountId =
+    await User.find({
+      role: {
+        $ne: 'admin'
+      },
+
+      $or: [
+        {
+          accountId: {
+            $exists: false
+          }
         },
-      },
-      {
-        accountId: null,
-      },
-      {
-        accountId: '',
-      },
-    ],
-  }).sort({
-    _id: 1,
-  });
+        {
+          accountId: null
+        },
+        {
+          accountId: ''
+        }
+      ]
+    }).sort({
+      _id: 1
+    });
 
   for (
-    const user of usersWithoutaccountId
+    const user of usersWithoutAccountId
   ) {
     const counter =
       await Counter.findOneAndUpdate(
         {
-          key: 'accountId',
+          key: 'accountId'
         },
         {
           $inc: {
-            seq: 1,
-          },
+            seq: 1
+          }
         },
         {
-          returnDocument: 'after',
-        },
+          new: true
+        }
       );
 
     if (!counter) {
       throw new Error(
-        'Could not generate account ID.',
+        'Could not generate account ID.'
       );
     }
 
     user.accountId =
-      `BT${String(counter.seq).padStart(
+      `BT${String(
+        counter.seq
+      ).padStart(
         5,
-        '0',
+        '0'
       )}`;
 
     await user.save();
@@ -221,68 +258,69 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * 7. MIGRATE LEGACY TEMPLATES
    * ----------------------------------------------------
    */
+
   const rawTemplates =
     await Template.collection
       .find({
         $or: [
           {
             businessId: {
-              $exists: false,
-            },
+              $exists: false
+            }
           },
           {
-            businessId: null,
+            businessId: null
           },
           {
             accountId: {
-              $exists: false,
-            },
+              $exists: false
+            }
           },
           {
-            accountId: null,
-          },
-        ],
+            accountId: null
+          }
+        ]
       })
       .toArray();
 
   for (
     const raw of rawTemplates
   ) {
-    const rawData = raw as any;
+    const rawData =
+      raw as Record<
+        string,
+        any
+      >;
 
     const name = String(
       rawData.name ||
       rawData.templateName ||
       rawData.title ||
-      'Untitled Template',
+      'Untitled Template'
     ).trim();
 
-    /**
-     * Try finding owner using the template's
-     * existing businessId.
-     */
     let owner = null;
 
-    if (rawData.businessId) {
-      owner = await User.findOne({
-        businessId: rawData.businessId,
-      }).lean();
+    if (
+      rawData.businessId
+    ) {
+      owner =
+        await User.findOne({
+          businessId:
+            rawData.businessId
+        }).lean();
     }
 
-    /**
-     * If legacy template has no owner/business,
-     * attach it to admin account.
-     */
     const resolvedBusinessId =
       rawData.businessId ||
       business._id;
 
-    const resolvedaccountId =
+    const resolvedAccountId =
       owner?.accountId ?? 0;
 
     await Template.collection.updateOne(
       {
-        _id: raw._id,
+        _id: raw._id
       },
       {
         $set: {
@@ -290,45 +328,46 @@ export async function bootstrapDevelopmentData(): Promise<void> {
             resolvedBusinessId,
 
           accountId:
-            resolvedaccountId,
+            resolvedAccountId,
 
           name,
 
           description: String(
             rawData.description ||
-            '',
+            ''
           ),
 
           design:
             normalizeLegacyDesign(
-              rawData.design,
+              rawData.design
             ),
 
           html: String(
-            rawData.html || '',
+            rawData.html ||
+            ''
           ),
 
           previewImage: String(
             rawData.previewImage ||
-            '',
+            ''
           ),
 
           previewImageName: String(
             rawData.previewImageName ||
-            '',
+            ''
           ),
 
           status: [
             'draft',
             'published',
-            'locked',
+            'locked'
           ].includes(
-            rawData.status,
+            rawData.status
           )
             ? rawData.status
-            : 'draft',
-        },
-      },
+            : 'draft'
+        }
+      }
     );
   }
 
@@ -337,28 +376,29 @@ export async function bootstrapDevelopmentData(): Promise<void> {
    * 8. MIGRATE LEGACY CAMPAIGNS
    * ----------------------------------------------------
    */
+
   await Campaign.collection.updateMany(
     {
       $or: [
         {
           businessId: {
-            $exists: false,
-          },
+            $exists: false
+          }
         },
         {
-          businessId: null,
-        },
-      ],
+          businessId: null
+        }
+      ]
     },
     {
       $set: {
         businessId:
-          business._id,
-      },
-    },
+          business._id
+      }
+    }
   );
 
   console.log(
-    '[BRAIN TECHNO] Development bootstrap completed.',
+    '[BRAIN TECHNO] Development bootstrap completed.'
   );
 }
