@@ -19,6 +19,14 @@ interface IRegisterRequest {
   password: string;
   businessName: string;
   businessCategory?: string;
+  businessSlug: string;
+}
+
+interface IRegistrationAvailabilityRequest {
+  mobile?: string;
+  email?: string;
+  businessName?: string;
+  businessSlug?: string;
 }
 
 interface ILoginRequest {
@@ -27,11 +35,77 @@ interface ILoginRequest {
 }
 
 const slugify = (value: string): string =>
-  value
+  String(value || '')
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
+    .replace(/^-+|-+$/g, '');
+
+const isValidEmail = (value: string): boolean =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+const isValidMobile = (value: string): boolean =>
+  /^\d{10}$/.test(value);
+
+const getSlugRecommendations = async (
+  requestedSlug: string,
+  businessName = ''
+): Promise<string[]> => {
+  const base =
+    slugify(requestedSlug) ||
+    slugify(businessName) ||
+    'business';
+
+  const year = new Date().getFullYear();
+
+  const candidates = [
+    `${base}-official`,
+    `${base}-online`,
+    `${base}-${year}`,
+    `${base}-01`,
+    `${base}-02`,
+    `${base}-03`,
+    `${base}-04`,
+    `${base}-05`,
+    `${base}-web`,
+    `${base}-india`
+  ];
+
+  const existing = await Business.find({
+    slug: {
+      $in: candidates
+    }
+  })
+    .select('slug')
+    .lean();
+
+  const used = new Set(
+    existing.map((item: any) => String(item.slug || ''))
+  );
+
+  const recommendations = candidates
+    .filter((slug) => !used.has(slug))
+    .slice(0, 4);
+
+  let suffix = 6;
+
+  while (recommendations.length < 4) {
+    const slug = `${base}-${String(suffix).padStart(2, '0')}`;
+    suffix += 1;
+
+    if (used.has(slug)) {
+      continue;
+    }
+
+    const exists = await Business.exists({ slug });
+
+    if (!exists) {
+      recommendations.push(slug);
+    }
+  }
+
+  return recommendations;
+};
 
 const nextAccountId = async (): Promise<string> => {
   const counter = await Counter.findOneAndUpdate(
@@ -89,6 +163,80 @@ const publicUser = (
 };
 
 router.post(
+  '/register/availability',
+  async (req, res, next) => {
+    try {
+      const {
+        mobile,
+        email,
+        businessName,
+        businessSlug
+      } = (req.body || {}) as IRegistrationAvailabilityRequest;
+
+      const normalizedMobile = String(mobile || '').trim();
+      const normalizedEmail = String(email || '')
+        .trim()
+        .toLowerCase();
+      const normalizedSlug = slugify(
+        String(businessSlug || businessName || '')
+      );
+
+      const [mobileExists, emailExists, slugExists] = await Promise.all([
+        normalizedMobile
+          ? User.exists({ mobile: normalizedMobile })
+          : Promise.resolve(null),
+        normalizedEmail
+          ? User.exists({ email: normalizedEmail })
+          : Promise.resolve(null),
+        normalizedSlug
+          ? Business.exists({ slug: normalizedSlug })
+          : Promise.resolve(null)
+      ]);
+
+      const mobileAvailable = normalizedMobile
+        ? !mobileExists
+        : null;
+      const emailAvailable = normalizedEmail
+        ? !emailExists
+        : null;
+      const slugAvailable = normalizedSlug
+        ? !slugExists
+        : null;
+
+      const slugRecommendations =
+        normalizedSlug && slugAvailable === false
+          ? await getSlugRecommendations(
+              normalizedSlug,
+              String(businessName || '')
+            )
+          : [];
+
+      return res.json({
+        mobileAvailable,
+        emailAvailable,
+        slugAvailable,
+        normalizedSlug,
+        mobileMessage:
+          mobileAvailable === false
+            ? 'An account already exists with this mobile number.'
+            : '',
+        emailMessage:
+          emailAvailable === false
+            ? 'An account already exists with this email address.'
+            : '',
+        slugMessage:
+          slugAvailable === false
+            ? 'This business slug is already in use. Choose another one.'
+            : '',
+        slugRecommendations
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.post(
   '/register',
   async (req, res, next) => {
     try {
@@ -98,7 +246,8 @@ router.post(
         email,
         password,
         businessName,
-        businessCategory
+        businessCategory,
+        businessSlug
       } = (req.body || {}) as Partial<IRegisterRequest>;
 
       if (
@@ -106,18 +255,20 @@ router.post(
         !mobile ||
         !email ||
         !password ||
-        !businessName
+        !businessName ||
+        !businessSlug
       ) {
         return res.status(400).json({
+          type: 'warning',
           message:
-            'Owner name, mobile, business name, email and password are required.'
+            'Owner name, mobile, email, business name, business slug and password are required.'
         });
       }
 
       if (String(password).length < 8) {
         return res.status(400).json({
-          message:
-            'Password must be at least 8 characters.'
+          type: 'warning',
+          message: 'Password must be at least 8 characters.'
         });
       }
 
@@ -126,45 +277,70 @@ router.post(
         .trim();
 
       const normalizedMobile = String(mobile).trim();
+      const normalizedBusinessName = String(businessName).trim();
+      const normalizedSlug = slugify(String(businessSlug));
 
-      const existingUser = await User.findOne({
-        $or: [
-          {
-            email: normalizedEmail
-          },
-          {
-            mobile: normalizedMobile
-          }
-        ]
-      });
-
-      if (existingUser) {
-        if (existingUser.email === normalizedEmail) {
-          return res.status(409).json({
-            message:
-              'An account already exists with this email.'
-          });
-        }
-
-        return res.status(409).json({
-          message:
-            'An account already exists with this mobile number.'
+      if (!isValidMobile(normalizedMobile)) {
+        return res.status(400).json({
+          type: 'warning',
+          field: 'mobile',
+          message: 'Mobile number must be exactly 10 digits.'
         });
       }
 
-      let slug =
-        slugify(String(businessName)) ||
-        'brain-techno-business';
+      if (!isValidEmail(normalizedEmail)) {
+        return res.status(400).json({
+          type: 'warning',
+          field: 'email',
+          message: 'Please enter a valid email address.'
+        });
+      }
 
-      if (await Business.exists({ slug })) {
-        slug = `${slug}-${Date.now()
-          .toString()
-          .slice(-6)}`;
+      if (!normalizedSlug) {
+        return res.status(400).json({
+          type: 'warning',
+          field: 'businessSlug',
+          message: 'Business slug is required.'
+        });
+      }
+
+      const [mobileExists, emailExists, slugExists] = await Promise.all([
+        User.exists({ mobile: normalizedMobile }),
+        User.exists({ email: normalizedEmail }),
+        Business.exists({ slug: normalizedSlug })
+      ]);
+
+      if (mobileExists) {
+        return res.status(409).json({
+          type: 'warning',
+          field: 'mobile',
+          message: 'An account already exists with this mobile number.'
+        });
+      }
+
+      if (emailExists) {
+        return res.status(409).json({
+          type: 'warning',
+          field: 'email',
+          message: 'An account already exists with this email address.'
+        });
+      }
+
+      if (slugExists) {
+        return res.status(409).json({
+          type: 'warning',
+          field: 'businessSlug',
+          message: 'This business slug is already in use. Choose another one.',
+          slugRecommendations: await getSlugRecommendations(
+            normalizedSlug,
+            normalizedBusinessName
+          )
+        });
       }
 
       const business = await Business.create({
-        name: String(businessName).trim(),
-        slug
+        name: normalizedBusinessName,
+        slug: normalizedSlug
       });
 
       try {
@@ -180,18 +356,16 @@ router.post(
           ownerName: String(ownerName).trim(),
           mobile: normalizedMobile,
           email: normalizedEmail,
-          businessName: String(businessName).trim(),
-          businessCategory:
-            String(
-              businessCategory || 'General'
-            ).trim(),
+          businessName: normalizedBusinessName,
+          businessCategory: String(
+            businessCategory || 'General'
+          ).trim(),
           passwordHash,
           businessId: business._id,
           role: 'owner'
         });
 
         business.ownerId = user._id;
-
         await business.save();
 
         return res.status(201).json({
@@ -205,7 +379,44 @@ router.post(
 
         throw error;
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        const keyPattern = error?.keyPattern || {};
+        const keyValue = error?.keyValue || {};
+
+        if (keyPattern.mobile || keyValue.mobile) {
+          return res.status(409).json({
+            type: 'warning',
+            field: 'mobile',
+            message: 'An account already exists with this mobile number.'
+          });
+        }
+
+        if (keyPattern.email || keyValue.email) {
+          return res.status(409).json({
+            type: 'warning',
+            field: 'email',
+            message: 'An account already exists with this email address.'
+          });
+        }
+
+        if (keyPattern.slug || keyValue.slug) {
+          const slug = slugify(
+            String(req.body?.businessSlug || req.body?.businessName || '')
+          );
+
+          return res.status(409).json({
+            type: 'warning',
+            field: 'businessSlug',
+            message: 'This business slug is already in use. Choose another one.',
+            slugRecommendations: await getSlugRecommendations(
+              slug,
+              String(req.body?.businessName || '')
+            )
+          });
+        }
+      }
+
       return next(error);
     }
   }
@@ -222,8 +433,7 @@ router.post(
 
       if (!email || !password) {
         return res.status(400).json({
-          message:
-            'Email and password are required.'
+          message: 'Email and password are required.'
         });
       }
 
@@ -237,21 +447,18 @@ router.post(
 
       if (!user) {
         return res.status(401).json({
-          message:
-            'Invalid email or password.'
+          message: 'Invalid email or password.'
         });
       }
 
-      const passwordMatched =
-        await bcrypt.compare(
-          String(password),
-          user.passwordHash
-        );
+      const passwordMatched = await bcrypt.compare(
+        String(password),
+        user.passwordHash
+      );
 
       if (!passwordMatched) {
         return res.status(401).json({
-          message:
-            'Invalid email or password.'
+          message: 'Invalid email or password.'
         });
       }
 
