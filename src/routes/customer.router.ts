@@ -1,9 +1,6 @@
-import {
-  Router
-} from 'express';
-import {
-  requireAuth
-} from '../middleware/auth.js';
+import { Router } from 'express';
+
+import { requireAuth } from '../middleware/auth.js';
 
 import {
   Customer,
@@ -12,69 +9,38 @@ import {
 } from '../models/customer.model.js';
 
 
-const router =
-  Router();
+const router = Router();
 
-router.use(
-  requireAuth
-);
+router.use(requireAuth);
 
 
-type CustomerType =
-  typeof CUSTOMER_TYPES[number];
-
-type CustomerSource =
-  typeof CUSTOMER_SOURCES[number];
+type CustomerType = typeof CUSTOMER_TYPES[number];
+type CustomerSource = typeof CUSTOMER_SOURCES[number];
 
 
-function cleanText(
-  value: unknown
-): string {
-
-  return String(
-    value ?? ''
-  ).trim();
+function cleanText(value: unknown): string {
+  return String(value ?? '').trim();
 }
 
 
-function escapeRegExp(
-  value: string
-): string {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-  return value.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    '\\$&'
+
+function getAccountId(req: any, res: any): string | null {
+  const tokenAccountId = cleanText(req.auth?.accountId);
+
+  const requestedAccountId = cleanText(
+    req.query?.accountId ?? req.body?.accountId
   );
-}
 
-
-function getAccountId(
-  req: any,
-  res: any
-): string | null {
-
-  const tokenAccountId =
-    cleanText(
-      req.auth?.accountId
-    );
-
-  const requestedAccountId =
-    cleanText(
-      req.query?.accountId ??
-      req.body?.accountId
-    );
-
-  if (
-    req.auth?.role === 'admin'
-  ) {
-    const value =
-      requestedAccountId ||
-      tokenAccountId;
+  if (req.auth?.role === 'admin') {
+    const value = requestedAccountId || tokenAccountId;
 
     if (!value) {
       res.status(400).json({
-        message:
-          'accountId is required.'
+        message: 'accountId is required.'
       });
 
       return null;
@@ -83,125 +49,65 @@ function getAccountId(
     return value;
   }
 
-
   if (!tokenAccountId) {
     res.status(403).json({
-      message:
-        'Your login session does not contain an account ID.'
+      message: 'Your login session does not contain an account ID.'
     });
 
     return null;
   }
-
 
   if (
     requestedAccountId &&
-    requestedAccountId !==
-    tokenAccountId
+    requestedAccountId !== tokenAccountId
   ) {
     res.status(403).json({
-      message:
-        'You cannot access customers from another account.'
+      message: 'You cannot access customers from another account.'
     });
 
     return null;
   }
-
 
   return tokenAccountId;
 }
 
 
-function normalizeType(
-  value: unknown
-): CustomerType | '' {
+function normalizeType(value: unknown): CustomerType | '' {
+  const text = cleanText(value);
 
-  const text =
-    cleanText(value);
-
-  return (
-    CUSTOMER_TYPES as
-    readonly string[]
-  ).includes(text)
-    ? text as CustomerType
+  return (CUSTOMER_TYPES as readonly string[]).includes(text)
+    ? (text as CustomerType)
     : '';
 }
 
 
-function normalizeSource(
-  value: unknown
-): CustomerSource | '' {
+function normalizeSource(value: unknown): CustomerSource | '' {
+  const text = cleanText(value);
 
-  const text =
-    cleanText(value);
-
-  return (
-    CUSTOMER_SOURCES as
-    readonly string[]
-  ).includes(text)
-    ? text as CustomerSource
+  return (CUSTOMER_SOURCES as readonly string[]).includes(text)
+    ? (text as CustomerSource)
     : '';
 }
 
 
-function publicCustomer(
-  item: any
-) {
-
+function publicCustomer(item: any) {
   return {
-    id:
-      String(
-        item._id
-      ),
-
-    accountId:
-      cleanText(
-        item.accountId
-      ),
-
-    name:
-      cleanText(
-        item.name
-      ),
-
-    mobile:
-      cleanText(
-        item.mobile
-      ),
-
-    email:
-      cleanText(
-        item.email
-      ),
-
-    customerType:
-      item.customerType,
-
-    source:
-      item.source,
-
-    image:
-      cleanText(
-        item.image
-      ),
-
-    lastContactAt:
-      item.lastContactAt ??
-      null,
-
-    createdAt:
-      item.createdAt,
-
-    updatedAt:
-      item.updatedAt
+    id: String(item._id),
+    accountId: cleanText(item.accountId),
+    name: cleanText(item.name),
+    mobile: cleanText(item.mobile),
+    email: cleanText(item.email),
+    customerType: item.customerType,
+    source: item.source,
+    image: cleanText(item.image),
+    lastContactAt: item.lastContactAt ?? null,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
   };
 }
 
 
-async function buildCounts(
-  accountId: string
-) {
-
+async function buildCounts(accountId: string) {
   const [
     total,
     newCount,
@@ -210,43 +116,41 @@ async function buildCounts(
     interested,
     followup,
     converted
-  ] =
-    await Promise.all([
-      Customer.countDocuments({
-        accountId
-      }),
+  ] = await Promise.all([
+    Customer.countDocuments({
+      accountId
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'New'
-      }),
+    Customer.countDocuments({
+      accountId,
+      customerType: 'New'
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'Regular'
-      }),
+    Customer.countDocuments({
+      accountId,
+      customerType: 'Regular'
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'VIP'
-      }),
+    Customer.countDocuments({
+      accountId,
+      customerType: 'VIP'
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'Interested'
-      }),
+    Customer.countDocuments({
+      accountId,
+      customerType: 'Interested'
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'Followup'
-      }),
+    Customer.countDocuments({
+      accountId,
+      customerType: 'Followup'
+    }),
 
-      Customer.countDocuments({
-        accountId,
-        customerType: 'Converted'
-      })
-    ]);
-
+    Customer.countDocuments({
+      accountId,
+      customerType: 'Converted'
+    })
+  ]);
 
   return {
     total,
@@ -274,219 +178,125 @@ async function buildCounts(
  */
 router.get(
   '/',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
+      const page = Math.max(
+        1,
+        Number(req.query.page ?? 1) || 1
+      );
 
-      const page =
+      const limit = Math.min(
+        50,
         Math.max(
           1,
-          Number(
-            req.query.page ??
-            1
-          ) ||
-          1
-        );
+          Number(req.query.limit ?? 16) || 16
+        )
+      );
 
-
-      const limit =
-        Math.min(
-          50,
-          Math.max(
-            1,
-            Number(
-              req.query.limit ??
-              16
-            ) ||
-            16
-          )
-        );
-
-
-      const search =
-        cleanText(
-          req.query.search
-        );
-
-
-      const type =
-        normalizeType(
-          req.query.type
-        );
-
-
-      const source =
-        normalizeSource(
-          req.query.source
-        );
-
+      const search = cleanText(req.query.search);
+      const type = normalizeType(req.query.type);
+      const source = normalizeSource(req.query.source);
 
       const sort =
-        cleanText(
-          req.query.sort
-        ) ||
+        cleanText(req.query.sort) ||
         'newest';
-
 
       const filter: any = {
         accountId
       };
 
       if (type) {
-        filter.customerType =
-          type;
+        filter.customerType = type;
       }
-
 
       if (source) {
-        filter.source =
-          source;
+        filter.source = source;
       }
-
 
       if (search) {
+        const regex = new RegExp(
+          escapeRegExp(search),
+          'i'
+        );
 
-        const regex =
-          new RegExp(
-            escapeRegExp(
-              search
-            ),
-            'i'
-          );
-
-        filter.$or =
-          [
-            {
-              name: regex
-            },
-            {
-              mobile: regex
-            },
-            {
-              email: regex
-            }
-          ];
+        filter.$or = [
+          {
+            name: regex
+          },
+          {
+            mobile: regex
+          },
+          {
+            email: regex
+          }
+        ];
       }
 
-
-      let sortValue:
-        Record<
-          string,
-          1 | -1
-        > =
-      {
+      let sortValue: Record<string, 1 | -1> = {
         createdAt: -1
       };
 
-
-      if (
-        sort === 'oldest'
-      ) {
-        sortValue =
-        {
+      if (sort === 'oldest') {
+        sortValue = {
           createdAt: 1
         };
       }
 
-
-      if (
-        sort === 'name_asc'
-      ) {
-        sortValue =
-        {
+      if (sort === 'name_asc') {
+        sortValue = {
           name: 1,
           createdAt: -1
         };
       }
 
-
-      if (
-        sort === 'name_desc'
-      ) {
-        sortValue =
-        {
+      if (sort === 'name_desc') {
+        sortValue = {
           name: -1,
           createdAt: -1
         };
       }
 
-
       const [
         items,
         total,
         counts
-      ] =
-        await Promise.all([
-          Customer
-            .find(filter)
-            .sort(sortValue)
-            .skip(
-              (
-                page -
-                1
-              ) *
-              limit
-            )
-            .limit(limit)
-            .lean(),
+      ] = await Promise.all([
+        Customer
+          .find(filter)
+          .sort(sortValue)
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean(),
 
-          Customer
-            .countDocuments(
-              filter
-            ),
+        Customer.countDocuments(filter),
 
-          buildCounts(
-            accountId
-          )
-        ]);
+        buildCounts(accountId)
+      ]);
 
-
-      const totalPages =
-        Math.max(
-          1,
-          Math.ceil(
-            total /
-            limit
-          )
-        );
-
+      const totalPages = Math.max(
+        1,
+        Math.ceil(total / limit)
+      );
 
       return res.json({
-        items:
-          items.map(
-            publicCustomer
-          ),
+        items: items.map(publicCustomer),
 
         meta: {
           page,
           limit,
           total,
           totalPages,
-
-          hasMore:
-            page *
-            limit <
-            total
+          hasMore: page * limit < total
         },
 
         counts
       });
-
     } catch (error) {
       return next(error);
     }
@@ -500,81 +310,52 @@ router.get(
  */
 router.post(
   '/',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
-
       const customerType =
-        normalizeType(
-          req.body
-            ?.customerType
-        ) ||
+        normalizeType(req.body?.customerType) ||
         'New';
 
-
       const source =
-        normalizeSource(
-          req.body
-            ?.source
-        ) ||
+        normalizeSource(req.body?.source) ||
         'Manual';
 
+      const customer = await Customer.create({
+        accountId,
 
-      const customer =
-        await Customer.create({
-          accountId,
+        businessId:
+          req.auth?.businessId ||
+          undefined,
 
-          businessId:
-            req.auth
-              ?.businessId ||
-            undefined,
+        name: cleanText(
+          req.body?.name
+        ),
 
-          name:
-            cleanText(
-              req.body?.name
-            ),
+        mobile: cleanText(
+          req.body?.mobile
+        ),
 
-          mobile:
-            cleanText(
-              req.body?.mobile
-            ),
+        email: cleanText(
+          req.body?.email
+        ).toLowerCase(),
 
-          email:
-            cleanText(
-              req.body?.email
-            )
-              .toLowerCase(),
+        customerType,
+        source,
 
-          customerType,
+        image: cleanText(
+          req.body?.image
+        ),
 
-          source,
-
-          image:
-            cleanText(
-              req.body?.image
-            ),
-
-          lastContactAt:
-            req.body
-              ?.lastContactAt ||
-            null
-        });
-
+        lastContactAt:
+          req.body?.lastContactAt ||
+          null
+      });
 
       return res
         .status(201)
@@ -583,7 +364,6 @@ router.post(
             customer.toObject()
           )
         );
-
     } catch (error) {
       return next(error);
     }
@@ -596,148 +376,89 @@ router.post(
  */
 router.patch(
   '/:id',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
+      const patch: Record<string, unknown> = {};
 
-      const patch:
-        Record<
-          string,
-          unknown
-        > =
-        {};
-
-
-      if (
-        'name' in req.body
-      ) {
-        patch.name =
-          cleanText(
-            req.body.name
-          );
-      }
-
-
-      if (
-        'mobile' in req.body
-      ) {
-        patch.mobile =
-          cleanText(
-            req.body.mobile
-          );
-      }
-
-
-      if (
-        'email' in req.body
-      ) {
-        patch.email =
-          cleanText(
-            req.body.email
-          )
-            .toLowerCase();
-      }
-
-
-      if (
-        'image' in req.body
-      ) {
-        patch.image =
-          cleanText(
-            req.body.image
-          );
-      }
-
-
-      const customerType =
-        normalizeType(
-          req.body
-            ?.customerType
+      if ('name' in req.body) {
+        patch.name = cleanText(
+          req.body.name
         );
+      }
+
+      if ('mobile' in req.body) {
+        patch.mobile = cleanText(
+          req.body.mobile
+        );
+      }
+
+      if ('email' in req.body) {
+        patch.email = cleanText(
+          req.body.email
+        ).toLowerCase();
+      }
+
+      if ('image' in req.body) {
+        patch.image = cleanText(
+          req.body.image
+        );
+      }
+
+      const customerType = normalizeType(
+        req.body?.customerType
+      );
 
       if (customerType) {
-        patch.customerType =
-          customerType;
+        patch.customerType = customerType;
       }
 
-
-      const source =
-        normalizeSource(
-          req.body
-            ?.source
-        );
+      const source = normalizeSource(
+        req.body?.source
+      );
 
       if (source) {
-        patch.source =
-          source;
+        patch.source = source;
       }
 
-
-      if (
-        'lastContactAt' in
-        req.body
-      ) {
+      if ('lastContactAt' in req.body) {
         patch.lastContactAt =
-          req.body
-            .lastContactAt ||
+          req.body.lastContactAt ||
           null;
       }
 
-
-      const customer =
-        await Customer
-          .findOneAndUpdate(
-            {
-              _id:
-                req.params.id,
-
-              accountId
-            },
-
-            {
-              $set:
-                patch
-            },
-
-            {
-              new: true,
-              runValidators: true
-            }
-          )
-          .lean();
-
+      const customer = await Customer
+        .findOneAndUpdate(
+          {
+            _id: req.params.id,
+            accountId
+          },
+          {
+            $set: patch
+          },
+          {
+            new: true,
+            runValidators: true
+          }
+        )
+        .lean();
 
       if (!customer) {
         return res
           .status(404)
           .json({
-            message:
-              'Customer not found.'
+            message: 'Customer not found.'
           });
       }
 
-
       return res.json(
-        publicCustomer(
-          customer
-        )
+        publicCustomer(customer)
       );
-
     } catch (error) {
       return next(error);
     }
@@ -750,50 +471,30 @@ router.patch(
  */
 router.delete(
   '/:id',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
-
-      const customer =
-        await Customer
-          .findOneAndDelete({
-            _id:
-              req.params.id,
-
-            accountId
-          });
-
+      const customer = await Customer.findOneAndDelete({
+        _id: req.params.id,
+        accountId
+      });
 
       if (!customer) {
         return res
           .status(404)
           .json({
-            message:
-              'Customer not found.'
+            message: 'Customer not found.'
           });
       }
 
-
       return res.json({
-        message:
-          'Customer deleted successfully.'
+        message: 'Customer deleted successfully.'
       });
-
     } catch (error) {
       return next(error);
     }
@@ -807,65 +508,50 @@ function normalizeImportRows(
   businessId: unknown,
   source: CustomerSource
 ) {
-
   return rows
-    .slice(
-      0,
-      2000
-    )
-    .map(
-      (row: any) => {
+    .slice(0, 2000)
+    .map((row: any) => {
+      const type =
+        normalizeType(
+          row?.customerType ??
+          row?.type
+        ) ||
+        'New';
 
-        const type =
-          normalizeType(
-            row?.customerType ??
-            row?.type
-          ) ||
-          'New';
+      return {
+        accountId,
 
+        businessId:
+          businessId ||
+          undefined,
 
-        return {
-          accountId,
+        name: cleanText(
+          row?.name ??
+          row?.customerName
+        ),
 
-          businessId:
-            businessId ||
-            undefined,
+        mobile: cleanText(
+          row?.mobile ??
+          row?.phone ??
+          row?.contact
+        ),
 
-          name:
-            cleanText(
-              row?.name ??
-              row?.customerName
-            ),
+        email: cleanText(
+          row?.email
+        ).toLowerCase(),
 
-          mobile:
-            cleanText(
-              row?.mobile ??
-              row?.phone ??
-              row?.contact
-            ),
+        customerType: type,
+        source,
 
-          email:
-            cleanText(
-              row?.email
-            )
-              .toLowerCase(),
+        image: cleanText(
+          row?.image
+        ),
 
-          customerType:
-            type,
-
-          source,
-
-          image:
-            cleanText(
-              row?.image
-            ),
-
-          lastContactAt:
-            row?.lastContactAt ||
-            null
-        };
-      }
-    )
+        lastContactAt:
+          row?.lastContactAt ||
+          null
+      };
+    })
     .filter(
       row =>
         row.name ||
@@ -885,52 +571,32 @@ function normalizeImportRows(
  * }
  *
  * Frontend can parse the Excel sheet and send
- * normalized rows here. This keeps backend free
- * from an additional XLSX dependency.
+ * normalized rows here.
  */
 router.post(
   '/import/excel',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
+      const rows = Array.isArray(
+        req.body?.rows
+      )
+        ? req.body.rows
+        : [];
 
-      const rows =
-        Array.isArray(
-          req.body?.rows
-        )
-          ? req.body.rows
-          : [];
+      const normalized = normalizeImportRows(
+        rows,
+        accountId,
+        req.auth?.businessId,
+        'Excel'
+      );
 
-
-      const normalized =
-        normalizeImportRows(
-          rows,
-          accountId,
-          req.auth
-            ?.businessId,
-          'Excel'
-        );
-
-
-      if (
-        normalized.length ===
-        0
-      ) {
+      if (normalized.length === 0) {
         return res
           .status(400)
           .json({
@@ -939,24 +605,18 @@ router.post(
           });
       }
 
-
-      const result =
-        await Customer
-          .insertMany(
-            normalized,
-            {
-              ordered: false
-            }
-          );
-
+      const result = await Customer.insertMany(
+        normalized,
+        {
+          ordered: false
+        }
+      );
 
       return res
         .status(201)
         .json({
-          imported:
-            result.length
+          imported: result.length
         });
-
     } catch (error) {
       return next(error);
     }
@@ -978,47 +638,28 @@ router.post(
  */
 router.post(
   '/import/ai',
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const accountId =
-        getAccountId(
-          req,
-          res
-        );
+      const accountId = getAccountId(req, res);
 
       if (!accountId) {
         return;
       }
 
+      const rows = Array.isArray(
+        req.body?.rows
+      )
+        ? req.body.rows
+        : [];
 
-      const rows =
-        Array.isArray(
-          req.body?.rows
-        )
-          ? req.body.rows
-          : [];
+      const normalized = normalizeImportRows(
+        rows,
+        accountId,
+        req.auth?.businessId,
+        'AI'
+      );
 
-
-      const normalized =
-        normalizeImportRows(
-          rows,
-          accountId,
-          req.auth
-            ?.businessId,
-          'AI'
-        );
-
-
-      if (
-        normalized.length ===
-        0
-      ) {
+      if (normalized.length === 0) {
         return res
           .status(400)
           .json({
@@ -1027,24 +668,18 @@ router.post(
           });
       }
 
-
-      const result =
-        await Customer
-          .insertMany(
-            normalized,
-            {
-              ordered: false
-            }
-          );
-
+      const result = await Customer.insertMany(
+        normalized,
+        {
+          ordered: false
+        }
+      );
 
       return res
         .status(201)
         .json({
-          imported:
-            result.length
+          imported: result.length
         });
-
     } catch (error) {
       return next(error);
     }

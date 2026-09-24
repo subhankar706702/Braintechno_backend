@@ -1,43 +1,55 @@
-# ==============================
-# Dependencies
-# ==============================
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+# compiled output
+/dist
+/tmp
+/out-tsc
+# Only exists if Bazel was run
+/bazel-out
+
+# dependencies
+/node_modules
+
+/.npmrc
+/package-lock.json
+# profiling files
+chrome-profiler-events*.json
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/*
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
+.DS_Store
+Thumbs.db
+/target
+# .npmrc
+.npmrc
+.package-lock.json
 node_modules/
-.pnpm-store/
-.npm/
-.yarn/
-.yarn-cache/
-
-# ==============================
-# Angular
-# ==============================
-.angular/
-.cache/
-dist/
-out-tsc/
-tmp/
-
-# ==============================
-# Environment files
-# ==============================
-.env
-.env.*
-!.env.example
-
-# ==============================
-# Logs
-# ==============================
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# ==============================
-# Runtime / temporary files
-# ==============================
-*.pid
-*.seed
-*.pid.lock
-*.tmp
-*.temp
+.vscode/
+.npm
+package-lock.json
