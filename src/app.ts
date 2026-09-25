@@ -5,7 +5,6 @@ import cors from 'cors';
 import {
   env
 } from './config/env.js';
-
 import adminRoutes from './routes/admin.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import businessRoutes from './routes/business.routes.js';
@@ -13,16 +12,13 @@ import campaignRoutes from './routes/campaign.routes.js';
 import customerRoutes from './routes/customer.router.js';
 import pageRoutes from './routes/page.routes.js';
 import templateRoutes from './routes/template.routes.js';
-
-
+import businessProfileRoutes from './routes/business-profile.routes.js';
 export const app =
   express();
-
 
 app.disable(
   'x-powered-by'
 );
-
 
 app.use(
   cors({
@@ -34,14 +30,12 @@ app.use(
   })
 );
 
-
 app.use(
   express.json({
     limit:
       '25mb'
   })
 );
-
 
 app.use(
   '/uploads',
@@ -52,7 +46,6 @@ app.use(
     )
   )
 );
-
 
 app.get(
   '/api/health',
@@ -72,54 +65,50 @@ app.get(
     })
 );
 
-
 app.use(
   '/api/auth',
   authRoutes
 );
-
 
 app.use(
   '/api/businesses',
   businessRoutes
 );
 
+app.use(
+  '/api/business/profile',
+  businessProfileRoutes
+);
 
 app.use(
   '/api/templates',
   templateRoutes
 );
 
-
 app.use(
   '/api/pages',
   pageRoutes
 );
-
 
 app.use(
   '/api/campaigns',
   campaignRoutes
 );
 
-
 app.use(
   '/api/campaign',
   campaignRoutes
 );
-
 
 app.use(
   '/api/customers',
   customerRoutes
 );
 
-
 app.use(
   '/api/admin',
   adminRoutes
 );
-
 
 app.use(
   (
@@ -133,7 +122,6 @@ app.use(
           'Route not found.'
       })
 );
-
 
 app.use(
   (
@@ -151,18 +139,15 @@ app.use(
       error
     );
 
-
     const duplicate =
       error?.code ===
       11000;
-
 
     const validation =
       error?.name ===
       'ValidationError' ||
       error?.name ===
       'CastError';
-
 
     return res
       .status(
