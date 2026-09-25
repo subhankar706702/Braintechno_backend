@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose';
-import { IPage } from '../interfaces';
+import { IPage } from '../interface';
 
 const schema = new Schema<IPage>(
   {

@@ -13,6 +13,7 @@ import customerRoutes from './routes/customer.router.js';
 import pageRoutes from './routes/page.routes.js';
 import templateRoutes from './routes/template.routes.js';
 import businessProfileRoutes from './routes/business-profile.routes.js';
+import businessCategoryRoutes from './routes/business-category.routes.js';
 export const app =
   express();
 
@@ -89,6 +90,12 @@ app.use(
   '/api/pages',
   pageRoutes
 );
+
+app.use(
+  '/api/business-categories',
+  businessCategoryRoutes
+);
+
 
 app.use(
   '/api/campaigns',
