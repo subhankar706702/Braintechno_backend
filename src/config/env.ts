@@ -1,7 +1,69 @@
-import 'dotenv/config';
-export const env = {
-  port: Number(process.env.PORT || 3000),
-  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/brain-techno',
-  jwtSecret: process.env.JWT_SECRET || 'brain-techno-local-development-secret-change-me',
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4200'
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const required = (
+  key: string,
+): string => {
+
+  const value =
+    String(
+      process.env[key] || '',
+    ).trim();
+
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${key}`,
+    );
+  }
+
+  return value;
 };
+
+export const env = {
+  port:
+    Number(process.env.PORT || 3000),
+
+  frontendUrl:
+    String(
+      process.env.FRONTEND_URL ||
+      'http://localhost:4200',
+    ).trim(),
+
+  mongodbUri:
+    String(
+      process.env.MONGODB_URI ||
+      'mongodb://127.0.0.1:27017/brain-techno',
+    ).trim(),
+
+  jwtSecret:
+    required('JWT_SECRET'),
+
+  cloudflareAccountId:
+    required('CLOUDFLARE_ACCOUNT_ID'),
+
+  r2AccessKeyId:
+    required('R2_ACCESS_KEY_ID'),
+
+  r2SecretAccessKey:
+    required('R2_SECRET_ACCESS_KEY'),
+
+  r2BucketName:
+    required('R2_BUCKET_NAME'),
+
+  r2PublicUrl:
+    String(
+      process.env.R2_PUBLIC_URL || '',
+    )
+      .trim()
+      .replace(/\/$/, ''),
+
+  r2Endpoint:
+    String(
+      process.env.R2_ENDPOINT || '',
+    ).trim(),
+
+
+};
+
+

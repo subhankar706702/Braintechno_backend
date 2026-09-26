@@ -52,4 +52,5 @@ Thumbs.db
 node_modules/
 .vscode/
 .npm
+.env
 package-lock.json

@@ -55,8 +55,7 @@ const schema = new Schema<ICampaign>(
       required: true,
       lowercase: true,
       trim: true,
-      unique: true,
-      index: true
+      unique: true // 'index: true' টি সরিয়ে দেওয়া হয়েছে
     },
     fullSlug: {
       type: String,
@@ -149,6 +148,6 @@ const schema = new Schema<ICampaign>(
 
 schema.index({ businessId: 1, pageSlug: 1 }, { unique: true });
 schema.index({ businessSlug: 1, pageSlug: 1 }, { unique: true });
-schema.index({ publicSlug: 1 }, { unique: true });
+// schema.index({ publicSlug: 1 }, { unique: true });
 
 export const Campaign = model<ICampaign>('Campaign', schema);
