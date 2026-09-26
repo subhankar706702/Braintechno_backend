@@ -14,6 +14,7 @@ import templateRoutes from './routes/template.routes';
 import businessProfileRoutes from './routes/business-profile.routes';
 import businessCategoryRoutes from './routes/business-category.routes';
 import uploadRoutes from './routes/upload';
+import mediaRoutes from './routes/media.routes';
 
 export const app = express();
 
@@ -32,6 +33,8 @@ app.use(
   })
 );
 
+// Kept only for legacy URLs that may already exist in stored records.
+// New editor/customer media and template previews are uploaded to R2.
 app.use(
   '/uploads',
   express.static(path.resolve(process.cwd(), 'uploads'))
@@ -57,8 +60,10 @@ app.use('/api/campaign', campaignRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/admin', adminRoutes);
 
+// Account-scoped editor media library + hidden template-preview assets.
+app.use('/api/media', mediaRoutes);
 
-// R2 Upload API Endpoint
+// Existing generic R2 upload endpoint kept for existing project callers.
 app.use('/api', uploadRoutes);
 
 // 404 Route
@@ -81,14 +86,17 @@ app.use(
     const duplicate = error?.code === 11000;
     const validation =
       error?.name === 'ValidationError' || error?.name === 'CastError';
+    const multerError = error?.name === 'MulterError';
 
     return res
       .status(
-        duplicate ? 409 : validation ? 400 : 500
+        duplicate ? 409 : multerError ? 400 : validation ? 400 : 500
       )
       .json({
         message: duplicate
           ? 'A record with this value already exists.'
+          : multerError
+          ? error.message
           : validation
           ? error.message
           : 'Unexpected server error.',
