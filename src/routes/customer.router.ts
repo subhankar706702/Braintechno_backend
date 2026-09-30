@@ -22,6 +22,66 @@ function cleanText(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function normalizeMobile(value: unknown): string {
+  return cleanText(value).replace(/\D/g, '');
+}
+
+function normalizeEmail(value: unknown): string {
+  return cleanText(value).toLowerCase();
+}
+
+async function duplicateContact(
+  accountId: string,
+  mobile: string,
+  email: string,
+  excludeId?: string
+): Promise<{ mobile: boolean; email: boolean }> {
+  const or: any[] = [];
+  const mobileNormalized = normalizeMobile(mobile);
+  const emailNormalized = normalizeEmail(email);
+
+  if (mobileNormalized) {
+    or.push({ mobileNormalized });
+  }
+
+  if (emailNormalized) {
+    or.push({ emailNormalized });
+  }
+
+  if (!or.length) {
+    return { mobile: false, email: false };
+  }
+
+  const query: any = { accountId, $or: or };
+
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+
+  const matches = await Customer.find(query)
+    .select('mobileNormalized emailNormalized')
+    .lean();
+
+  return {
+    mobile: !!mobileNormalized && matches.some(item => item.mobileNormalized === mobileNormalized),
+    email: !!emailNormalized && matches.some(item => item.emailNormalized === emailNormalized)
+  };
+}
+
+function duplicateMessage(duplicate: { mobile: boolean; email: boolean }): string {
+  const messages: string[] = [];
+
+  if (duplicate.mobile) {
+    messages.push('This mobile number is already added in your contact list.');
+  }
+
+  if (duplicate.email) {
+    messages.push('This email is already added in your contact list.');
+  }
+
+  return messages.join(' ');
+}
+
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -75,9 +135,22 @@ function getAccountId(req: any, res: any): string | null {
 function normalizeType(value: unknown): CustomerType | '' {
   const text = cleanText(value);
 
-  return (CUSTOMER_TYPES as readonly string[]).includes(text)
-    ? (text as CustomerType)
-    : '';
+  if (!text) {
+    return '';
+  }
+
+  const normalized = text.toLowerCase();
+
+  const typeMap: Record<string, CustomerType> = {
+    new: 'New',
+    regular: 'Regular',
+    vip: 'VIP',
+    interested: 'Interested',
+    followup: 'Followup',
+    converted: 'Converted'
+  };
+
+  return typeMap[normalized] ?? '';
 }
 
 
@@ -326,6 +399,17 @@ router.post(
         normalizeSource(req.body?.source) ||
         'Manual';
 
+      const mobile = cleanText(req.body?.mobile);
+      const email = normalizeEmail(req.body?.email);
+      const duplicate = await duplicateContact(accountId, mobile, email);
+
+      if (duplicate.mobile || duplicate.email) {
+        return res.status(409).json({
+          message: duplicateMessage(duplicate),
+          duplicate
+        });
+      }
+
       const customer = await Customer.create({
         accountId,
 
@@ -337,13 +421,11 @@ router.post(
           req.body?.name
         ),
 
-        mobile: cleanText(
-          req.body?.mobile
-        ),
+        mobile,
+        mobileNormalized: normalizeMobile(mobile),
 
-        email: cleanText(
-          req.body?.email
-        ).toLowerCase(),
+        email,
+        emailNormalized: normalizeEmail(email),
 
         customerType,
         source,
@@ -386,22 +468,53 @@ router.patch(
 
       const patch: Record<string, unknown> = {};
 
+      const existing = await Customer.findOne({
+        _id: req.params.id,
+        accountId
+      }).lean();
+
+      if (!existing) {
+        return res.status(404).json({
+          message: 'Customer not found.'
+        });
+      }
+
       if ('name' in req.body) {
         patch.name = cleanText(
           req.body.name
         );
       }
 
+      const nextMobile = 'mobile' in req.body
+        ? cleanText(req.body.mobile)
+        : cleanText(existing.mobile);
+
+      const nextEmail = 'email' in req.body
+        ? normalizeEmail(req.body.email)
+        : normalizeEmail(existing.email);
+
       if ('mobile' in req.body) {
-        patch.mobile = cleanText(
-          req.body.mobile
-        );
+        patch.mobile = nextMobile;
+        patch.mobileNormalized = normalizeMobile(nextMobile);
       }
 
       if ('email' in req.body) {
-        patch.email = cleanText(
-          req.body.email
-        ).toLowerCase();
+        patch.email = nextEmail;
+        patch.emailNormalized = normalizeEmail(nextEmail);
+      }
+
+      const duplicate = await duplicateContact(
+        accountId,
+        nextMobile,
+        nextEmail,
+        req.params.id
+      );
+
+      if (duplicate.mobile || duplicate.email) {
+        return res.status(409).json({
+          message: duplicateMessage(duplicate),
+          duplicate
+        });
       }
 
       if ('image' in req.body) {

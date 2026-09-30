@@ -4,6 +4,7 @@ export type TemplateGalleryCategory =
   | 'new'
   | 'locked'
   | 'free'
+  | 'premium'
   | 'coming_soon';
 
 export interface ITemplate {
@@ -25,9 +26,9 @@ export interface ITemplate {
   previewImageName?: string;
 
   status?:
-    | 'draft'
-    | 'published'
-    | 'locked';
+  | 'draft'
+  | 'published'
+  | 'locked';
 
   /**
    * Gallery type:
@@ -43,7 +44,7 @@ export interface ITemplate {
   templateType?: number;
 
   galleryCategory?:
-    TemplateGalleryCategory;
+  TemplateGalleryCategory;
 
   createdAt?: Date;
   updatedAt?: Date;

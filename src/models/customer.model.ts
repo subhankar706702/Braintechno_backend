@@ -53,11 +53,23 @@ const customerSchema =
                 trim: true
             },
 
+            mobileNormalized: {
+                type: String,
+                default: '',
+                index: true
+            },
+
             email: {
                 type: String,
                 default: '',
                 trim: true,
                 lowercase: true
+            },
+
+            emailNormalized: {
+                type: String,
+                default: '',
+                index: true
             },
 
             customerType: {
@@ -101,6 +113,38 @@ customerSchema.index({
     customerType: 1,
     source: 1
 });
+
+customerSchema.index(
+    {
+        accountId: 1,
+        mobileNormalized: 1
+    },
+    {
+        unique: true,
+        partialFilterExpression: {
+            mobileNormalized: {
+                $type: 'string',
+                $gt: ''
+            }
+        }
+    }
+);
+
+customerSchema.index(
+    {
+        accountId: 1,
+        emailNormalized: 1
+    },
+    {
+        unique: true,
+        partialFilterExpression: {
+            emailNormalized: {
+                $type: 'string',
+                $gt: ''
+            }
+        }
+    }
+);
 
 
 export const Customer =
