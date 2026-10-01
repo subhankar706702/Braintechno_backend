@@ -15,6 +15,7 @@ import businessProfileRoutes from './routes/business-profile.routes';
 import businessCategoryRoutes from './routes/business-category.routes';
 import uploadRoutes from './routes/upload';
 import mediaRoutes from './routes/media.routes';
+import messageRoutes from './routes/message.routes';
 
 export const app = express();
 
@@ -58,6 +59,7 @@ app.use('/api/business-categories', businessCategoryRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/campaign', campaignRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/messages', messageRoutes);
 app.use('/api/admin', adminRoutes);
 
 // Account-scoped editor media library + hidden template-preview assets.

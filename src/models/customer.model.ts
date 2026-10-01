@@ -20,7 +20,8 @@ export const CUSTOMER_SOURCES = [
     'Excel',
     'AI',
     'Instagram',
-    'Direct'
+    'Direct',
+    'Campaign'
 ] as const;
 
 
