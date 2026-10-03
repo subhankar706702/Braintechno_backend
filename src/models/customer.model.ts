@@ -1,8 +1,6 @@
-import {
-    Schema,
-    model
+import mongoose, {
+    Schema
 } from 'mongoose';
-
 
 export const CUSTOMER_TYPES = [
     'New',
@@ -24,84 +22,89 @@ export const CUSTOMER_SOURCES = [
     'Campaign'
 ] as const;
 
+export const DEFAULT_CUSTOMER_TYPE = CUSTOMER_TYPES[0];
 
-const customerSchema =
-    new Schema(
-        {
-            accountId: {
-                type: String,
-                required: true,
-                trim: true,
-                index: true
-            },
+export const DEFAULT_CUSTOMER_SOURCE =
+    CUSTOMER_SOURCES.find(source => source === 'Manual') ??
+    CUSTOMER_SOURCES[0];
 
-            businessId: {
-                type: Schema.Types.ObjectId,
-                ref: 'Business',
-                required: false,
-                index: true
-            },
 
-            name: {
-                type: String,
-                default: '',
-                trim: true
-            },
-
-            mobile: {
-                type: String,
-                default: '',
-                trim: true
-            },
-
-            mobileNormalized: {
-                type: String,
-                default: '',
-                index: true
-            },
-
-            email: {
-                type: String,
-                default: '',
-                trim: true,
-                lowercase: true
-            },
-
-            emailNormalized: {
-                type: String,
-                default: '',
-                index: true
-            },
-
-            customerType: {
-                type: String,
-                enum: CUSTOMER_TYPES,
-                default: 'New',
-                index: true
-            },
-
-            source: {
-                type: String,
-                enum: CUSTOMER_SOURCES,
-                default: 'Manual',
-                index: true
-            },
-
-            image: {
-                type: String,
-                default: '',
-                trim: true
-            },
-
-            lastContactAt: {
-                type: Date,
-                default: null
-            }
+const customerSchema = new Schema(
+    {
+        accountId: {
+            type: String,
+            required: true,
+            trim: true,
+            index: true
         },
-        {
-            timestamps: true
+
+        businessId: {
+            type: Schema.Types.ObjectId,
+            ref: 'Business',
+            required: false,
+            index: true
+        },
+
+        name: {
+            type: String,
+            default: '',
+            trim: true
+        },
+
+        mobile: {
+            type: String,
+            default: '',
+            trim: true
+        },
+
+        mobileNormalized: {
+            type: String,
+            default: '',
+            index: true
+        },
+
+        email: {
+            type: String,
+            default: '',
+            trim: true,
+            lowercase: true
+        },
+
+        emailNormalized: {
+            type: String,
+            default: '',
+            index: true
+        },
+
+        customerType: {
+            type: String,
+            enum: CUSTOMER_TYPES,
+            default: DEFAULT_CUSTOMER_TYPE,
+            index: true
+        },
+
+        source: {
+            type: String,
+            enum: CUSTOMER_SOURCES,
+            default: DEFAULT_CUSTOMER_SOURCE,
+            index: true
+        },
+
+        image: {
+            type: String,
+            default: '',
+            trim: true
+        },
+
+        lastContactAt: {
+            type: Date,
+            default: null
         }
-    );
+    },
+    {
+        timestamps: true
+    }
+);
 
 
 customerSchema.index({
@@ -149,7 +152,5 @@ customerSchema.index(
 
 
 export const Customer =
-    model(
-        'Customer',
-        customerSchema
-    );
+    mongoose.models.Customer ||
+    mongoose.model('Customer', customerSchema);
