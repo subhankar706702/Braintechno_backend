@@ -116,6 +116,33 @@ export const env = {
     ).trim(),
 
   /*
+   * LinkedIn
+   */
+  linkedinClientId:
+    String(
+      process.env.LINKEDIN_CLIENT_ID ||
+      '',
+    ).trim(),
+
+  linkedinClientSecret:
+    String(
+      process.env.LINKEDIN_CLIENT_SECRET ||
+      '',
+    ).trim(),
+
+  linkedinRedirectUri:
+    String(
+      process.env.LINKEDIN_REDIRECT_URI ||
+      '',
+    ).trim(),
+
+  linkedinOAuthScopes:
+    String(
+      process.env.LINKEDIN_OAUTH_SCOPES ||
+      'openid profile email w_member_social',
+    ).trim(),
+
+  /*
    * AES-256-GCM encryption key.
    */
   socialTokenEncryptionKey:

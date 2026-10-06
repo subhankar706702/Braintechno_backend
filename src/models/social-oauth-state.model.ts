@@ -2,7 +2,8 @@ import { Schema, model, Types } from 'mongoose';
 
 export type SocialOAuthProvider =
   | 'facebook'
-  | 'instagram';
+  | 'instagram'
+  | 'linkedin';
 
 export interface ISocialOAuthState {
   stateHash: string;
