@@ -63,6 +63,27 @@ export const env = {
       process.env.R2_ENDPOINT || '',
     ).trim(),
 
+  metaAppId:
+    String(process.env.META_APP_ID || '').trim(),
+
+  metaAppSecret:
+    String(process.env.META_APP_SECRET || '').trim(),
+
+  metaGraphApiVersion:
+    String(process.env.META_GRAPH_API_VERSION || 'v26.0').trim(),
+
+  metaFacebookRedirectUri:
+    String(process.env.META_FACEBOOK_REDIRECT_URI || '').trim(),
+
+  socialTokenEncryptionKey:
+    String(process.env.SOCIAL_TOKEN_ENCRYPTION_KEY || '').trim(),
+
+  facebookOAuthScopes:
+    String(
+      process.env.FACEBOOK_OAUTH_SCOPES ||
+      'pages_show_list,pages_read_engagement,pages_manage_posts',
+    ).trim(),
+
 
 };
 

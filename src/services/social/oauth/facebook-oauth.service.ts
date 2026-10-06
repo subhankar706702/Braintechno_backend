@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
-
-import { env } from '../../../config/env.js';
-import { SocialAccount } from '../../../models/social-account.model.js';
-import { SocialOAuthState } from '../../../models/social-oauth-state.model.js';
-import { encryptSocialToken } from '../../../utils/social/token-crypto.js';
+import { env } from '../../../config/env';
+import { SocialOAuthState } from '../../../models/social-oauth-state.model';
+import { SocialAccount } from '../../../models/social-account.model';
+import { User } from '../../../models/user.model';
+import {
+  decryptSocialToken,
+  encryptSocialToken,
+} from '../../../utils/social/token-crypto';
 
 interface FacebookTokenResponse {
   access_token?: string;
@@ -12,359 +15,269 @@ interface FacebookTokenResponse {
   error?: { message?: string; type?: string; code?: number };
 }
 
-interface FacebookMeResponse {
-  id?: string;
-  name?: string;
-  error?: { message?: string; type?: string; code?: number };
-}
-
 interface FacebookPage {
   id: string;
-  name: string;
+  name?: string;
   access_token?: string;
   tasks?: string[];
 }
 
-interface FacebookAccountsResponse {
+interface FacebookPagesResponse {
   data?: FacebookPage[];
   error?: { message?: string; type?: string; code?: number };
 }
 
-interface FacebookOAuthPage {
-  id: string;
-  name: string;
-  tasks: string[];
-}
+const facebookBase = (): string =>
+  `https://graph.facebook.com/${env.metaGraphApiVersion}`;
 
-export interface FacebookOAuthSelection {
-  selectionToken: string;
-  pages: FacebookOAuthPage[];
-}
+const facebookOAuthBase = (): string =>
+  `https://www.facebook.com/${env.metaGraphApiVersion}/dialog/oauth`;
 
-export interface FacebookOAuthResult {
-  type: 'connected' | 'selection_required';
-  page?: {
-    id: string;
-    name: string;
-  };
-  selection?: FacebookOAuthSelection;
-}
+const graphError = (body: { error?: { message?: string } }): string =>
+  body?.error?.message || 'Facebook Graph API request failed.';
 
-function clean(value: unknown): string {
-  return String(value ?? '').trim();
-}
-
-function facebookError(response: any, fallback: string): Error {
-  const message = clean(response?.error?.message);
-  return new Error(message || fallback);
-}
-
-function assertConfig(): void {
-  const missing: string[] = [];
-
-  if (!env.metaAppId) missing.push('META_APP_ID');
-  if (!env.metaAppSecret) missing.push('META_APP_SECRET');
-  if (!env.metaFacebookRedirectUri) {
-    missing.push('META_FACEBOOK_REDIRECT_URI');
-  }
-  if (!env.socialTokenEncryptionKey) {
-    missing.push('SOCIAL_TOKEN_ENCRYPTION_KEY');
-  }
-
-  if (missing.length) {
+const assertConfigured = (): void => {
+  if (!env.metaAppId || !env.metaAppSecret || !env.metaFacebookRedirectUri) {
     throw Object.assign(
-      new Error(`Facebook OAuth configuration is incomplete: ${missing.join(', ')}`),
+      new Error(
+        'Facebook OAuth is not configured. Set META_APP_ID, META_APP_SECRET and META_FACEBOOK_REDIRECT_URI in the backend .env.'
+      ),
       { status: 503 }
     );
   }
-}
+};
 
-function graphUrl(path: string): string {
-  return `https://graph.facebook.com/${env.metaGraphApiVersion}${path}`;
-}
+const hashToken = (value: string): string =>
+  crypto.createHash('sha256').update(value).digest('hex');
 
-async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      ...(init?.headers || {}),
-    },
+export const createFacebookOAuthStart = async (input: {
+  userId: string;
+  businessId: string;
+  accountId?: string | number;
+}): Promise<string> => {
+  assertConfigured();
+
+  const rawState = crypto.randomBytes(32).toString('base64url');
+  const stateHash = hashToken(rawState);
+
+  await SocialOAuthState.create({
+    stateHash,
+    userId: input.userId,
+    businessId: input.businessId,
+    provider: 'facebook',
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
   });
 
-  const body = (await response.json().catch(() => ({}))) as T;
+  const params = new URLSearchParams({
+    client_id: env.metaAppId,
+    redirect_uri: env.metaFacebookRedirectUri,
+    state: rawState,
+    response_type: 'code',
+    scope: env.facebookOAuthScopes,
+  });
 
-  if (!response.ok) {
-    throw facebookError(body, `Facebook Graph API returned HTTP ${response.status}.`);
+  return `${facebookOAuthBase()}?${params.toString()}`;
+};
+
+const exchangeCode = async (code: string): Promise<FacebookTokenResponse> => {
+  const tokenParams = new URLSearchParams({
+    client_id: env.metaAppId,
+    client_secret: env.metaAppSecret,
+    redirect_uri: env.metaFacebookRedirectUri,
+    code,
+  });
+
+  const response = await fetch(
+    `${facebookBase()}/oauth/access_token?${tokenParams.toString()}`
+  );
+  const body = (await response.json()) as FacebookTokenResponse;
+
+  if (!response.ok || !body.access_token) {
+    throw new Error(graphError(body));
   }
 
   return body;
-}
+};
 
-export class FacebookOAuthService {
-  static async createAuthorizationUrl(scope: {
-    businessId: string;
-    accountId: string | number;
-  }): Promise<string> {
-    assertConfig();
+const getPages = async (userAccessToken: string): Promise<FacebookPage[]> => {
+  const response = await fetch(
+    `${facebookBase()}/me/accounts?fields=id,name,access_token,tasks&access_token=${encodeURIComponent(userAccessToken)}`
+  );
+  const body = (await response.json()) as FacebookPagesResponse;
 
-    const rawState = crypto.randomBytes(32).toString('base64url');
-    const stateHash = crypto
-      .createHash('sha256')
-      .update(rawState)
-      .digest('hex');
+  if (!response.ok) {
+    throw new Error(graphError(body));
+  }
 
-    await SocialOAuthState.create({
+  return (body.data || []).filter(
+    (page): page is FacebookPage & { access_token: string } =>
+      Boolean(page.id && page.access_token)
+  );
+};
+
+export const handleFacebookOAuthCallback = async (
+  code: string,
+  rawState: string
+): Promise<{ selectionToken?: string }> => {
+  assertConfigured();
+
+  const stateHash = hashToken(rawState);
+  const state = await SocialOAuthState.findOneAndUpdate(
+    {
       stateHash,
-      businessId: scope.businessId,
-      accountId: scope.accountId,
-      platform: 'Facebook',
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
-
-    const params = new URLSearchParams({
-      client_id: env.metaAppId,
-      redirect_uri: env.metaFacebookRedirectUri,
-      state: rawState,
-      response_type: 'code',
-      auth_type: 'rerequest',
-      scope: [
-        'public_profile',
-        'pages_show_list',
-        'pages_read_engagement',
-        'pages_manage_posts',
-      ].join(','),
-    });
-
-    return `https://www.facebook.com/${env.metaGraphApiVersion}/dialog/oauth?${params.toString()}`;
-  }
-
-  static async handleCallback(
-    code: string,
-    rawState: string
-  ): Promise<FacebookOAuthResult> {
-    assertConfig();
-
-    const stateHash = crypto
-      .createHash('sha256')
-      .update(rawState)
-      .digest('hex');
-
-    const state = await SocialOAuthState.findOneAndUpdate(
-      {
-        stateHash,
-        platform: 'Facebook',
-        usedAt: null,
-        expiresAt: { $gt: new Date() },
-      },
-      { $set: { usedAt: new Date() } },
-      { new: true }
-    ).lean();
-
-    if (!state) {
-      throw Object.assign(
-        new Error('Facebook OAuth state is invalid, expired, or already used.'),
-        { status: 400 }
-      );
-    }
-
-    const tokenParams = new URLSearchParams({
-      client_id: env.metaAppId,
-      client_secret: env.metaAppSecret,
-      redirect_uri: env.metaFacebookRedirectUri,
-      code,
-    });
-
-    const token = await getJson<FacebookTokenResponse>(
-      `${graphUrl('/oauth/access_token')}?${tokenParams.toString()}`
-    );
-
-    const shortLivedUserAccessToken = clean(token.access_token);
-    if (!shortLivedUserAccessToken) {
-      throw new Error('Facebook did not return a user access token.');
-    }
-
-    const longLivedParams = new URLSearchParams({
-      grant_type: 'fb_exchange_token',
-      client_id: env.metaAppId,
-      client_secret: env.metaAppSecret,
-      fb_exchange_token: shortLivedUserAccessToken,
-    });
-
-    const longLived = await getJson<FacebookTokenResponse>(
-      `${graphUrl('/oauth/access_token')}?${longLivedParams.toString()}`
-    );
-
-    const userAccessToken = clean(longLived.access_token) || shortLivedUserAccessToken;
-
-    const me = await getJson<FacebookMeResponse>(
-      `${graphUrl('/me')}?fields=id,name&access_token=${encodeURIComponent(userAccessToken)}`
-    );
-
-    const accounts = await getJson<FacebookAccountsResponse>(
-      `${graphUrl('/me/accounts')}?fields=id,name,access_token,tasks&access_token=${encodeURIComponent(userAccessToken)}`
-    );
-
-    const pages = Array.isArray(accounts.data)
-      ? accounts.data.filter(page => page.id && page.name && page.access_token)
-      : [];
-
-    if (!pages.length) {
-      throw Object.assign(
-        new Error('No Facebook Pages were returned for this Facebook account.'),
-        { status: 400 }
-      );
-    }
-
-    if (pages.length === 1) {
-      await this.savePage(state.businessId, state.accountId, pages[0], me);
-
-      return {
-        type: 'connected',
-        page: {
-          id: pages[0].id,
-          name: pages[0].name,
-        },
-      };
-    }
-
-    const selectionToken = crypto.randomBytes(32).toString('base64url');
-    const selectionHash = crypto
-      .createHash('sha256')
-      .update(selectionToken)
-      .digest('hex');
-
-    await SocialOAuthState.findByIdAndUpdate(state._id, {
-      $set: {
-        stateHash: selectionHash,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-        usedAt: null,
-      },
-    });
-
-    // Store the encrypted user token temporarily in the OAuth-state document.
-    // The field is added dynamically by Mongoose only if the schema is extended
-    // with pendingAccessToken; see the supplied model patch.
-    await SocialOAuthState.findByIdAndUpdate(state._id, {
-      $set: {
-        pendingAccessToken: encryptSocialToken(userAccessToken),
-        pendingFacebookUserId: clean(me.id),
-      },
-    });
-
-    return {
-      type: 'selection_required',
-      selection: {
-        selectionToken,
-        pages: pages.map(page => ({
-          id: page.id,
-          name: page.name,
-          tasks: Array.isArray(page.tasks) ? page.tasks : [],
-        })),
-      },
-    };
-  }
-
-  static async selectPage(
-    selectionToken: string,
-    pageId: string
-  ): Promise<{ id: string; name: string }> {
-    assertConfig();
-
-    const selectionHash = crypto
-      .createHash('sha256')
-      .update(selectionToken)
-      .digest('hex');
-
-    const state = await SocialOAuthState.findOne({
-      stateHash: selectionHash,
-      platform: 'Facebook',
+      provider: 'facebook',
       usedAt: null,
       expiresAt: { $gt: new Date() },
-    }).select('+pendingAccessToken +pendingFacebookUserId');
+    },
+    { $set: { usedAt: new Date() } },
+    { new: true }
+  );
 
-    if (!state) {
-      throw Object.assign(
-        new Error('Facebook page selection session is invalid or expired.'),
-        { status: 400 }
-      );
-    }
-
-    const pendingAccessToken = clean(state.pendingAccessToken);
-    if (!pendingAccessToken) {
-      throw Object.assign(
-        new Error('Facebook page selection session is incomplete.'),
-        { status: 400 }
-      );
-    }
-
-    const { decryptSocialToken } = await import('../../../utils/social/token-crypto.js');
-    const userAccessToken = decryptSocialToken(pendingAccessToken);
-
-    const accounts = await getJson<FacebookAccountsResponse>(
-      `${graphUrl('/me/accounts')}?fields=id,name,access_token,tasks&access_token=${encodeURIComponent(userAccessToken)}`
+  if (!state) {
+    throw Object.assign(
+      new Error('Facebook OAuth state is invalid, expired, or already used.'),
+      { status: 400 }
     );
+  }
 
-    const page = (accounts.data || []).find(
-      item => item.id === pageId && item.access_token
+  const tokenBody = await exchangeCode(code);
+  const pages = await getPages(tokenBody.access_token!);
+
+  if (pages.length === 0) {
+    throw Object.assign(
+      new Error(
+        'No Facebook Page is available for this account. Make sure the Facebook user manages at least one Page and grant the requested permissions.'
+      ),
+      { status: 409 }
     );
+  }
 
-    if (!page) {
-      throw Object.assign(
-        new Error('The selected Facebook Page is not available to this connection.'),
-        { status: 403 }
-      );
-    }
-
-    await this.savePage(state.businessId, state.accountId, page, {
-      id: clean(state.pendingFacebookUserId),
-    });
-
+  if (pages.length === 1) {
+    await saveFacebookPage(
+      String(state.userId),
+      String(state.businessId),
+      pages[0]
+    );
     await SocialOAuthState.deleteOne({ _id: state._id });
-
-    return {
-      id: page.id,
-      name: page.name,
-    };
+    return {};
   }
 
-  private static async savePage(
-    businessId: any,
-    accountId: string | number,
-    page: FacebookPage,
-    me: FacebookMeResponse
-  ): Promise<void> {
-    const pageAccessToken = clean(page.access_token);
-    if (!pageAccessToken) {
-      throw new Error('Facebook did not return a Page access token.');
+  const selectionToken = crypto.randomBytes(32).toString('base64url');
+  const selectionExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  // Keep the short-lived user token encrypted while the user selects a Page.
+  await SocialOAuthState.updateOne(
+    { _id: state._id },
+    {
+      $set: {
+        selectionTokenHash: hashToken(selectionToken),
+        selectionExpiresAt,
+        encryptedData: encryptSocialToken(
+          JSON.stringify({
+            userAccessToken: tokenBody.access_token,
+            pages: pages.map((page) => ({
+              id: page.id,
+              name: page.name || 'Facebook Page',
+              accessToken: page.access_token,
+            })),
+          })
+        ),
+      },
     }
+  );
 
-    const encryptedToken = encryptSocialToken(pageAccessToken);
+  return { selectionToken };
+};
 
-    await SocialAccount.findOneAndUpdate(
-      {
-        businessId,
-        accountId,
-        platform: 'Facebook',
-      },
-      {
-        $set: {
-          accountName: clean(me.name) || clean(page.name),
-          pageName: clean(page.name),
-          externalAccountId: clean(page.id),
-          facebookPageId: clean(page.id),
-          facebookUserId: clean(me.id),
-          accessToken: encryptedToken,
-          status: 'Connected',
-          tokenExpiresAt: null,
-        },
-      },
-      {
-        upsert: true,
-        new: true,
-        setDefaultsOnInsert: true,
-        runValidators: true,
-      }
+export const getFacebookPageSelection = async (
+  selectionToken: string,
+  userId: string
+): Promise<Array<{ id: string; name: string }>> => {
+  const state = await SocialOAuthState.findOne({
+    selectionTokenHash: hashToken(selectionToken),
+    userId,
+    provider: 'facebook',
+    selectionExpiresAt: { $gt: new Date() },
+  }).select('+encryptedData');
+
+  if (!state?.encryptedData) {
+    throw Object.assign(
+      new Error('Facebook Page selection session is invalid or expired.'),
+      { status: 400 }
     );
   }
-}
+
+  const data = JSON.parse(decryptSocialToken(state.encryptedData)) as {
+    pages: Array<{ id: string; name: string; accessToken: string }>;
+  };
+
+  return data.pages.map((page) => ({ id: page.id, name: page.name }));
+};
+
+export const selectFacebookPage = async (
+  selectionToken: string,
+  userId: string,
+  pageId: string
+): Promise<void> => {
+  const state = await SocialOAuthState.findOne({
+    selectionTokenHash: hashToken(selectionToken),
+    userId,
+    provider: 'facebook',
+    selectionExpiresAt: { $gt: new Date() },
+  }).select('+encryptedData');
+
+  if (!state?.encryptedData) {
+    throw Object.assign(
+      new Error('Facebook Page selection session is invalid or expired.'),
+      { status: 400 }
+    );
+  }
+
+  const data = JSON.parse(decryptSocialToken(state.encryptedData)) as {
+    pages: Array<{ id: string; name: string; accessToken: string }>;
+  };
+  const page = data.pages.find((item) => item.id === pageId);
+
+  if (!page) {
+    throw Object.assign(new Error('Selected Facebook Page is not available.'), {
+      status: 404,
+    });
+  }
+
+  await saveFacebookPage(userId, String(state.businessId), page);
+
+  await SocialOAuthState.deleteOne({ _id: state._id });
+};
+
+export const saveFacebookPage = async (
+  userId: string,
+  businessId: string,
+  page: { id: string; name?: string; access_token?: string; accessToken?: string }
+): Promise<void> => {
+  const accessToken = page.access_token || page.accessToken;
+
+  if (!accessToken) {
+    throw new Error('Facebook Page access token was not returned.');
+  }
+
+  const user = await User.findById(userId).select('accountId').lean();
+
+  await SocialAccount.findOneAndUpdate(
+    { businessId, platform: 'Facebook' },
+    {
+      $set: {
+        userId,
+        businessId,
+        accountId: user?.accountId ? String(user.accountId) : '',
+        platform: 'Facebook',
+        externalAccountId: page.id,
+        accountName: page.name || 'Facebook Page',
+        pageName: page.name || 'Facebook Page',
+        accessTokenEncrypted: encryptSocialToken(accessToken),
+        tokenExpiresAt: null,
+        status: 'Connected',
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+};

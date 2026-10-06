@@ -1,35 +1,25 @@
 import crypto from 'node:crypto';
+import { env } from '../../config/env';
 
-import { env } from '../../config/env.js';
+const algorithm = 'aes-256-gcm';
 
-function getKey(): Buffer {
-  const raw = String(env.socialTokenEncryptionKey || '').trim();
+const key = (): Buffer => {
+  const value = String(env.socialTokenEncryptionKey || '').trim();
 
-  if (!raw) {
-    throw new Error('SOCIAL_TOKEN_ENCRYPTION_KEY is not configured.');
-  }
-
-  const key = /^[0-9a-fA-F]{64}$/.test(raw)
-    ? Buffer.from(raw, 'hex')
-    : Buffer.from(raw, 'base64');
-
-  if (key.length !== 32) {
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) {
     throw new Error(
-      'SOCIAL_TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes.'
+      'SOCIAL_TOKEN_ENCRYPTION_KEY must be a 64-character hexadecimal value.'
     );
   }
 
-  return key;
-}
+  return Buffer.from(value, 'hex');
+};
 
-export function encryptSocialToken(value: string): string {
-  const plaintext = String(value || '');
-  if (!plaintext) throw new Error('Cannot encrypt an empty social token.');
-
+export const encryptSocialToken = (plainText: string): string => {
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', getKey(), iv);
+  const cipher = crypto.createCipheriv(algorithm, key(), iv);
   const encrypted = Buffer.concat([
-    cipher.update(plaintext, 'utf8'),
+    cipher.update(plainText, 'utf8'),
     cipher.final(),
   ]);
   const tag = cipher.getAuthTag();
@@ -39,24 +29,24 @@ export function encryptSocialToken(value: string): string {
     tag.toString('base64url'),
     encrypted.toString('base64url'),
   ].join('.');
-}
+};
 
-export function decryptSocialToken(value: string): string {
-  const [ivPart, tagPart, encryptedPart] = String(value || '').split('.');
+export const decryptSocialToken = (payload: string): string => {
+  const [ivValue, tagValue, encryptedValue] = String(payload).split('.');
 
-  if (!ivPart || !tagPart || !encryptedPart) {
-    throw new Error('Stored social token has an invalid format.');
+  if (!ivValue || !tagValue || !encryptedValue) {
+    throw new Error('Invalid encrypted social token.');
   }
 
   const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    getKey(),
-    Buffer.from(ivPart, 'base64url')
+    algorithm,
+    key(),
+    Buffer.from(ivValue, 'base64url')
   );
-  decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagValue, 'base64url'));
 
   return Buffer.concat([
-    decipher.update(Buffer.from(encryptedPart, 'base64url')),
+    decipher.update(Buffer.from(encryptedValue, 'base64url')),
     decipher.final(),
   ]).toString('utf8');
-}
+};

@@ -65,8 +65,8 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/broadcasts/wallet', broadcastWalletRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
-app.use('/api/social', socialRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/social', socialRoutes);
 
 // Account-scoped editor media library + hidden template-preview assets.
 app.use('/api/media', mediaRoutes);

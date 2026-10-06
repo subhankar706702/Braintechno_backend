@@ -1,24 +1,31 @@
-import { Schema, model, type Types } from 'mongoose';
+import { Schema, model, Types } from 'mongoose';
 
 export interface ISocialOAuthState {
   stateHash: string;
+  userId: Types.ObjectId;
   businessId: Types.ObjectId;
-  accountId: string | number;
-  platform: 'Facebook';
+  provider: 'facebook';
+  encryptedData?: string;
   expiresAt: Date;
   usedAt?: Date | null;
-  pendingAccessToken?: string | null;
-  pendingFacebookUserId?: string | null;
+  selectionTokenHash?: string;
+  selectionExpiresAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-const socialOAuthStateSchema = new Schema<ISocialOAuthState>(
+const schema = new Schema<ISocialOAuthState>(
   {
     stateHash: {
       type: String,
       required: true,
       unique: true,
+      index: true,
+    },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
       index: true,
     },
     businessId: {
@@ -27,43 +34,39 @@ const socialOAuthStateSchema = new Schema<ISocialOAuthState>(
       required: true,
       index: true,
     },
-    accountId: {
-      type: Schema.Types.Mixed,
-      required: true,
-      index: true,
-    },
-    platform: {
+    provider: {
       type: String,
-      enum: ['Facebook'],
+      enum: ['facebook'],
       required: true,
-      default: 'Facebook',
+    },
+    encryptedData: {
+      type: String,
+      default: '',
     },
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
     usedAt: {
       type: Date,
       default: null,
     },
-    pendingAccessToken: {
+    selectionTokenHash: {
       type: String,
-      default: null,
-      select: false,
+      default: '',
+      index: true,
     },
-    pendingFacebookUserId: {
-      type: String,
+    selectionExpiresAt: {
+      type: Date,
       default: null,
-      select: false,
     },
   },
   { timestamps: true }
 );
 
-socialOAuthStateSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+schema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const SocialOAuthState = model<ISocialOAuthState>(
   'SocialOAuthState',
-  socialOAuthStateSchema
+  schema
 );
