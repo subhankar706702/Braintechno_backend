@@ -26,6 +26,19 @@ import {
   handleLinkedInOAuthCallback,
 } from '../services/social/oauth/linkedin-oauth.service';
 
+import {
+  createSocialPost,
+  getSocialPosts,
+  getSocialPost,
+  updateSocialPost,
+  deleteSocialPost,
+  scheduleSocialPost,
+} from '../services/social/social-post.service';
+
+import {
+  SocialPostStatus,
+} from '../models/social-post.model';
+
 import { env } from '../config/env';
 
 const router = Router();
@@ -825,6 +838,505 @@ router.delete(
           'Social account disconnected.',
       });
 
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/*
+ * SOCIAL POSTS
+ */
+
+/*
+ * GET ALL POSTS
+ */
+router.get(
+  '/posts',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const status =
+        clean(
+          req.query.status,
+        );
+
+      const posts =
+        await getSocialPosts({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          status:
+            status
+              ? status as SocialPostStatus
+              : undefined,
+        });
+
+      return res.json(
+        posts,
+      );
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * GET SCHEDULED POSTS
+ */
+router.get(
+  '/posts/scheduled',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const posts =
+        await getSocialPosts({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          status:
+            'Scheduled',
+        });
+
+      return res.json(
+        posts,
+      );
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * GET PUBLISHED POSTS
+ */
+router.get(
+  '/posts/published',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const posts =
+        await getSocialPosts({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          status:
+            'Published',
+        });
+
+      return res.json(
+        posts,
+      );
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * GET ONE POST
+ */
+router.get(
+  '/posts/:id',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const post =
+        await getSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          postId:
+            String(
+              req.params.id,
+            ),
+        });
+
+      return res.json(
+        post,
+      );
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        'Social post not found.';
+
+      return res.status(
+        message ===
+          'Social post not found.'
+          ? 404
+          : 400,
+      ).json({
+        message,
+      });
+    }
+  },
+);
+
+
+/*
+ * CREATE POST
+ *
+ * Draft by default.
+ */
+router.post(
+  '/posts',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const status =
+        clean(
+          req.body?.status,
+        ) || 'Draft';
+
+      if (
+        ![
+          'Draft',
+          'Scheduled',
+        ].includes(status)
+      ) {
+        return res.status(400).json({
+          message:
+            'A new social post can only be Draft or Scheduled.',
+        });
+      }
+
+      const scheduledAt =
+        status === 'Scheduled'
+          ? new Date(
+              String(
+                req.body?.scheduledAt ??
+                  '',
+              ),
+            )
+          : null;
+
+      if (
+        status === 'Scheduled' &&
+        Number.isNaN(
+          scheduledAt!.getTime(),
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            'Invalid scheduled date and time.',
+        });
+      }
+
+      const post =
+        await createSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          body:
+            req.body,
+
+          status:
+            status as SocialPostStatus,
+
+          scheduledAt,
+        });
+
+      return res.status(201).json(
+        post,
+      );
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        'Unable to create social post.';
+
+      return res.status(400).json({
+        message,
+      });
+    }
+  },
+);
+
+
+/*
+ * UPDATE POST
+ */
+router.patch(
+  '/posts/:id',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const post =
+        await updateSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          postId:
+            String(
+              req.params.id,
+            ),
+
+          body:
+            req.body,
+        });
+
+      return res.json(
+        post,
+      );
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        'Unable to update social post.';
+
+      return res.status(
+        message ===
+          'Social post not found.'
+          ? 404
+          : 400,
+      ).json({
+        message,
+      });
+    }
+  },
+);
+
+
+/*
+ * DELETE POST
+ */
+router.delete(
+  '/posts/:id',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      await deleteSocialPost({
+        userId:
+          String(
+            req.auth!.userId,
+          ),
+
+        postId:
+          String(
+            req.params.id,
+          ),
+      });
+
+      return res.json({
+        message:
+          'Social post deleted successfully.',
+      });
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        'Unable to delete social post.';
+
+      return res.status(
+        message ===
+          'Social post not found.'
+          ? 404
+          : 400,
+      ).json({
+        message,
+      });
+    }
+  },
+);
+
+
+/*
+ * SCHEDULE POST
+ */
+router.post(
+  '/posts/:id/schedule',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const scheduledAt =
+        new Date(
+          String(
+            req.body?.scheduledAt ??
+              '',
+          ),
+        );
+
+      if (
+        Number.isNaN(
+          scheduledAt.getTime(),
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            'Invalid scheduled date and time.',
+        });
+      }
+
+      const post =
+        await scheduleSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          postId:
+            String(
+              req.params.id,
+            ),
+
+          scheduledAt,
+        });
+
+      return res.json(
+        post,
+      );
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        'Unable to schedule social post.';
+
+      return res.status(
+        message ===
+          'Social post not found.'
+          ? 404
+          : 400,
+      ).json({
+        message,
+      });
+    }
+  },
+);
+
+
+/*
+ * PUBLISH PLACEHOLDER
+ *
+ * Real provider publishing will be connected
+ * after live OAuth/domain setup.
+ */
+router.post(
+  '/posts/:id/publish',
+  requireAuth,
+  async (
+    req,
+    res,
+  ) => {
+    return res.status(409).json({
+      message:
+        'Social publishing provider is not enabled yet. Connect live provider APIs before publishing.',
+    });
+  },
+);
+
+
+/*
+ * CANCEL SCHEDULED POST
+ */
+router.post(
+  '/posts/:id/cancel',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+    try {
+      const {
+        getSocialPost,
+      } =
+        await import(
+          '../services/social/social-post.service'
+        );
+
+      const post =
+        await getSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          postId:
+            String(
+              req.params.id,
+            ),
+        });
+
+      if (
+        post.status !==
+        'Scheduled'
+      ) {
+        return res.status(400).json({
+          message:
+            'Only scheduled posts can be cancelled.',
+        });
+      }
+
+      const updated =
+        await updateSocialPost({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          postId:
+            String(
+              req.params.id,
+            ),
+
+          body: {
+            postTo:
+              post.postTo,
+
+            content:
+              post.content,
+
+            status:
+              'Draft',
+          },
+        });
+
+      return res.json(
+        updated,
+      );
     } catch (error) {
       return next(error);
     }
