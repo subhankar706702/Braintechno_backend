@@ -5,7 +5,6 @@ dotenv.config();
 const required = (
   key: string,
 ): string => {
-
   const value =
     String(
       process.env[key] || '',
@@ -22,7 +21,9 @@ const required = (
 
 export const env = {
   port:
-    Number(process.env.PORT || 3000),
+    Number(
+      process.env.PORT || 3000,
+    ),
 
   frontendUrl:
     String(
@@ -40,16 +41,24 @@ export const env = {
     required('JWT_SECRET'),
 
   cloudflareAccountId:
-    required('CLOUDFLARE_ACCOUNT_ID'),
+    required(
+      'CLOUDFLARE_ACCOUNT_ID',
+    ),
 
   r2AccessKeyId:
-    required('R2_ACCESS_KEY_ID'),
+    required(
+      'R2_ACCESS_KEY_ID',
+    ),
 
   r2SecretAccessKey:
-    required('R2_SECRET_ACCESS_KEY'),
+    required(
+      'R2_SECRET_ACCESS_KEY',
+    ),
 
   r2BucketName:
-    required('R2_BUCKET_NAME'),
+    required(
+      'R2_BUCKET_NAME',
+    ),
 
   r2PublicUrl:
     String(
@@ -63,20 +72,42 @@ export const env = {
       process.env.R2_ENDPOINT || '',
     ).trim(),
 
+  /*
+   * Meta / Instagram
+   */
   metaAppId:
-    String(process.env.META_APP_ID || '').trim(),
+    String(
+      process.env.META_APP_ID || '',
+    ).trim(),
 
   metaAppSecret:
-    String(process.env.META_APP_SECRET || '').trim(),
+    String(
+      process.env.META_APP_SECRET || '',
+    ).trim(),
 
   metaGraphApiVersion:
-    String(process.env.META_GRAPH_API_VERSION || 'v26.0').trim(),
+    String(
+      process.env.META_GRAPH_API_VERSION ||
+      'v26.0',
+    ).trim(),
 
   metaFacebookRedirectUri:
-    String(process.env.META_FACEBOOK_REDIRECT_URI || '').trim(),
+    String(
+      process.env.META_FACEBOOK_REDIRECT_URI ||
+      '',
+    ).trim(),
 
-  socialTokenEncryptionKey:
-    String(process.env.SOCIAL_TOKEN_ENCRYPTION_KEY || '').trim(),
+  metaInstagramRedirectUri:
+    String(
+      process.env.META_INSTAGRAM_REDIRECT_URI ||
+      '',
+    ).trim(),
+
+  instagramOAuthScopes:
+    String(
+      process.env.INSTAGRAM_OAUTH_SCOPES ||
+      'instagram_business_basic,instagram_business_content_publish',
+    ).trim(),
 
   facebookOAuthScopes:
     String(
@@ -84,7 +115,12 @@ export const env = {
       'pages_show_list,pages_read_engagement,pages_manage_posts',
     ).trim(),
 
-
+  /*
+   * AES-256-GCM encryption key.
+   */
+  socialTokenEncryptionKey:
+    String(
+      process.env.SOCIAL_TOKEN_ENCRYPTION_KEY ||
+      '',
+    ).trim(),
 };
-
-
