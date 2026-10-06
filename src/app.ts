@@ -18,6 +18,7 @@ import mediaRoutes from './routes/media.routes';
 import messageRoutes from './routes/message.routes';
 import broadcastRoutes from './routes/broadcast.routes';
 import broadcastWalletRoutes from './routes/broadcast-wallet.routes';
+import socialRoutes from './routes/social.routes';
 
 export const app = express();
 
@@ -64,6 +65,7 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/broadcasts/wallet', broadcastWalletRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
+app.use('/api/social', socialRoutes);
 app.use('/api/admin', adminRoutes);
 
 // Account-scoped editor media library + hidden template-preview assets.
