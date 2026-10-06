@@ -2,9 +2,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+
 const required = (
   key: string,
 ): string => {
+
   const value =
     String(
       process.env[key] || '',
@@ -19,7 +21,9 @@ const required = (
   return value;
 };
 
+
 export const env = {
+
   port:
     Number(
       process.env.PORT || 3000,
@@ -37,9 +41,19 @@ export const env = {
       'mongodb://127.0.0.1:27017/brain-techno',
     ).trim(),
 
-  jwtSecret:
-    required('JWT_SECRET'),
 
+  /*
+   * Authentication
+   */
+  jwtSecret:
+    required(
+      'JWT_SECRET',
+    ),
+
+
+  /*
+   * Cloudflare R2
+   */
   cloudflareAccountId:
     required(
       'CLOUDFLARE_ACCOUNT_ID',
@@ -65,15 +79,19 @@ export const env = {
       process.env.R2_PUBLIC_URL || '',
     )
       .trim()
-      .replace(/\/$/, ''),
+      .replace(
+        /\/$/,
+        '',
+      ),
 
   r2Endpoint:
     String(
       process.env.R2_ENDPOINT || '',
     ).trim(),
 
+
   /*
-   * Meta / Instagram
+   * Meta / Facebook / Instagram
    */
   metaAppId:
     String(
@@ -115,8 +133,9 @@ export const env = {
       'pages_show_list,pages_read_engagement,pages_manage_posts',
     ).trim(),
 
+
   /*
-   * LinkedIn
+   * LinkedIn OAuth
    */
   linkedinClientId:
     String(
@@ -142,8 +161,11 @@ export const env = {
       'openid profile email w_member_social',
     ).trim(),
 
+
   /*
-   * AES-256-GCM encryption key.
+   * Social token encryption.
+   *
+   * Must be a 64-character hex string.
    */
   socialTokenEncryptionKey:
     String(

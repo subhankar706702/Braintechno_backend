@@ -30,11 +30,18 @@ import { env } from '../config/env';
 
 const router = Router();
 
+
 const clean = (
   value: unknown,
 ): string =>
-  String(value ?? '').trim();
+  String(
+    value ?? '',
+  ).trim();
 
+
+/*
+ * FRONTEND OAUTH CALLBACK
+ */
 const frontendCallback = (
   status:
     | 'connected'
@@ -48,6 +55,7 @@ const frontendCallback = (
     | 'linkedin' =
     'facebook',
 ): string => {
+
   const url =
     new URL(
       '/app/social/connected-accounts',
@@ -122,6 +130,7 @@ router.get(
       const response =
         SOCIAL_PLATFORMS.map(
           platform => {
+
             const row =
               rows.find(
                 item =>
@@ -132,7 +141,9 @@ router.get(
             return {
               id:
                 row
-                  ? String(row._id)
+                  ? String(
+                      row._id,
+                    )
                   : '',
 
               platform,
@@ -163,254 +174,7 @@ router.get(
       return res.json(
         response,
       );
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
 
-
-/*
- * FACEBOOK OAUTH START
- */
-router.post(
-  '/oauth/facebook/start',
-  requireAuth,
-  async (
-    req,
-    res,
-    next,
-  ) => {
-    try {
-      const user =
-        await User.findById(
-          req.auth!.userId,
-        )
-          .select(
-            'businessId accountId',
-          )
-          .lean();
-
-      if (!user?.businessId) {
-        return res.status(409).json({
-          message:
-            'Your business account is not configured.',
-        });
-      }
-
-      const authorizationUrl =
-        await createFacebookOAuthStart({
-          userId:
-            req.auth!.userId,
-
-          businessId:
-            String(user.businessId),
-
-          accountId:
-            user.accountId,
-        });
-
-      return res.json({
-        authorizationUrl,
-      });
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
-
-
-/*
- * FACEBOOK OAUTH CALLBACK
- */
-router.get(
-  '/oauth/facebook/callback',
-  async (
-    req,
-    res,
-  ) => {
-    const code =
-      clean(req.query.code);
-
-    const state =
-      clean(req.query.state);
-
-    const error =
-      clean(req.query.error);
-
-    const errorDescription =
-      clean(
-        req.query.error_description,
-      );
-
-    if (error) {
-      return res.redirect(
-        frontendCallback(
-          'error',
-
-          errorDescription ||
-            error,
-
-          'facebook',
-        ),
-      );
-    }
-
-    if (!code || !state) {
-      return res.redirect(
-        frontendCallback(
-          'error',
-
-          'Facebook OAuth code or state is missing.',
-
-          'facebook',
-        ),
-      );
-    }
-
-    try {
-      const result =
-        await handleFacebookOAuthCallback(
-          code,
-          state,
-        );
-
-      if (
-        result.selectionToken
-      ) {
-        const url =
-          new URL(
-            '/app/social/connected-accounts',
-            env.frontendUrl,
-          );
-
-        url.searchParams.set(
-          'social',
-          'facebook',
-        );
-
-        url.searchParams.set(
-          'status',
-          'select_page',
-        );
-
-        url.searchParams.set(
-          'selectionToken',
-          result.selectionToken,
-        );
-
-        return res.redirect(
-          url.toString(),
-        );
-      }
-
-      return res.redirect(
-        frontendCallback(
-          'connected',
-          'Facebook connected successfully.',
-          'facebook',
-        ),
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Facebook connection failed.';
-
-      return res.redirect(
-        frontendCallback(
-          'error',
-          message,
-          'facebook',
-        ),
-      );
-    }
-  },
-);
-
-
-/*
- * FACEBOOK PAGE SELECTION
- */
-router.get(
-  '/oauth/facebook/pages',
-  requireAuth,
-  async (
-    req,
-    res,
-    next,
-  ) => {
-    try {
-      const selectionToken =
-        clean(
-          req.query.selectionToken,
-        );
-
-      if (!selectionToken) {
-        return res.status(400).json({
-          message:
-            'Selection token is required.',
-        });
-      }
-
-      const result =
-        await getFacebookPageSelection(
-          selectionToken,
-          req.auth!.userId,
-        );
-
-      return res.json(
-        result,
-      );
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
-
-
-/*
- * FACEBOOK PAGE SELECT
- */
-router.post(
-  '/oauth/facebook/pages/select',
-  requireAuth,
-  async (
-    req,
-    res,
-    next,
-  ) => {
-    try {
-      const selectionToken =
-        clean(
-          req.body?.selectionToken,
-        );
-
-      const pageId =
-        clean(
-          req.body?.pageId,
-        );
-
-      if (
-        !selectionToken ||
-        !pageId
-      ) {
-        return res.status(400).json({
-          message:
-            'Selection token and page ID are required.',
-        });
-      }
-
-      await selectFacebookPage(
-        selectionToken,
-        pageId,
-        req.auth!.userId,
-      );
-
-      return res.json({
-        message:
-          'Facebook Page connected successfully.',
-      });
     } catch (error) {
       return next(error);
     }
@@ -449,10 +213,14 @@ router.post(
       const authorizationUrl =
         await createInstagramOAuthStart({
           userId:
-            req.auth!.userId,
+            String(
+              req.auth!.userId,
+            ),
 
           businessId:
-            String(user.businessId),
+            String(
+              user.businessId,
+            ),
 
           accountId:
             user.accountId,
@@ -461,6 +229,7 @@ router.post(
       return res.json({
         authorizationUrl,
       });
+
     } catch (error) {
       return next(error);
     }
@@ -477,28 +246,29 @@ router.get(
     req,
     res,
   ) => {
+
     const code =
-      clean(req.query.code);
-
-    const state =
-      clean(req.query.state);
-
-    const error =
-      clean(req.query.error);
-
-    const errorDescription =
       clean(
-        req.query.error_description,
+        req.query.code,
       );
 
-    if (error) {
+    const state =
+      clean(
+        req.query.state,
+      );
+
+    const oauthError =
+      clean(
+        req.query.error_message ||
+        req.query.error_description ||
+        req.query.error,
+      );
+
+    if (oauthError) {
       return res.redirect(
         frontendCallback(
           'error',
-
-          errorDescription ||
-            error,
-
+          oauthError,
           'instagram',
         ),
       );
@@ -508,15 +278,14 @@ router.get(
       return res.redirect(
         frontendCallback(
           'error',
-
-          'Instagram OAuth code or state is missing.',
-
+          'Instagram did not return a valid OAuth response.',
           'instagram',
         ),
       );
     }
 
     try {
+
       await handleInstagramOAuthCallback(
         code,
         state,
@@ -525,23 +294,24 @@ router.get(
       return res.redirect(
         frontendCallback(
           'connected',
-
-          'Instagram connected successfully.',
-
+          undefined,
           'instagram',
         ),
       );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Instagram connection failed.';
+
+    } catch (error: any) {
+
+      console.error(
+        '[SOCIAL][INSTAGRAM OAUTH]',
+        error,
+      );
 
       return res.redirect(
         frontendCallback(
           'error',
 
-          message,
+          error?.message ||
+          'Instagram connection failed.',
 
           'instagram',
         ),
@@ -552,17 +322,19 @@ router.get(
 
 
 /*
- * LINKEDIN OAUTH START
+ * FACEBOOK OAUTH START
  */
 router.post(
-  '/oauth/linkedin/start',
+  '/oauth/facebook/start',
   requireAuth,
   async (
     req,
     res,
     next,
   ) => {
+
     try {
+
       const user =
         await User.findById(
           req.auth!.userId,
@@ -580,12 +352,16 @@ router.post(
       }
 
       const authorizationUrl =
-        await createLinkedInOAuthStart({
+        await createFacebookOAuthStart({
           userId:
-            req.auth!.userId,
+            String(
+              req.auth!.userId,
+            ),
 
           businessId:
-            String(user.businessId),
+            String(
+              user.businessId,
+            ),
 
           accountId:
             user.accountId,
@@ -594,6 +370,301 @@ router.post(
       return res.json({
         authorizationUrl,
       });
+
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * FACEBOOK OAUTH CALLBACK
+ */
+router.get(
+  '/oauth/facebook/callback',
+  async (
+    req,
+    res,
+  ) => {
+
+    const code =
+      clean(
+        req.query.code,
+      );
+
+    const state =
+      clean(
+        req.query.state,
+      );
+
+    const oauthError =
+      clean(
+        req.query.error_description ||
+        req.query.error,
+      );
+
+    if (oauthError) {
+      return res.redirect(
+        frontendCallback(
+          'error',
+          oauthError,
+          'facebook',
+        ),
+      );
+    }
+
+    if (!code || !state) {
+      return res.redirect(
+        frontendCallback(
+          'error',
+          'Facebook did not return a valid OAuth response.',
+          'facebook',
+        ),
+      );
+    }
+
+    try {
+
+      const result =
+        await handleFacebookOAuthCallback(
+          code,
+          state,
+        );
+
+      if (
+        result.selectionToken
+      ) {
+
+        const url =
+          new URL(
+            '/app/social/connected-accounts',
+            env.frontendUrl,
+          );
+
+        url.searchParams.set(
+          'social',
+          'facebook',
+        );
+
+        url.searchParams.set(
+          'status',
+          'select_page',
+        );
+
+        url.searchParams.set(
+          'selectionToken',
+          result.selectionToken,
+        );
+
+        return res.redirect(
+          url.toString(),
+        );
+      }
+
+      return res.redirect(
+        frontendCallback(
+          'connected',
+          undefined,
+          'facebook',
+        ),
+      );
+
+    } catch (error: any) {
+
+      console.error(
+        '[SOCIAL][FACEBOOK OAUTH]',
+        error,
+      );
+
+      return res.redirect(
+        frontendCallback(
+          'error',
+
+          error?.message ||
+          'Facebook connection failed.',
+
+          'facebook',
+        ),
+      );
+    }
+  },
+);
+
+
+/*
+ * FACEBOOK PAGE LIST
+ */
+router.get(
+  '/oauth/facebook/pages',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+
+    try {
+
+      const selectionToken =
+        clean(
+          req.query.selectionToken,
+        );
+
+      if (!selectionToken) {
+        return res.status(400).json({
+          message:
+            'Facebook Page selection token is required.',
+        });
+      }
+
+      const pages =
+        await getFacebookPageSelection(
+          selectionToken,
+
+          String(
+            req.auth!.userId,
+          ),
+        );
+
+      return res.json({
+        pages,
+      });
+
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * FACEBOOK PAGE SELECT
+ */
+router.post(
+  '/oauth/facebook/pages/select',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+
+    try {
+
+      const selectionToken =
+        clean(
+          req.body?.selectionToken,
+        );
+
+      const pageId =
+        clean(
+          req.body?.pageId,
+        );
+
+      if (
+        !selectionToken ||
+        !pageId
+      ) {
+        return res.status(400).json({
+          message:
+            'Facebook Page selection token and page ID are required.',
+        });
+      }
+
+      await selectFacebookPage(
+        selectionToken,
+
+        String(
+          req.auth!.userId,
+        ),
+
+        pageId,
+      );
+
+      return res.json({
+        message:
+          'Facebook Page connected successfully.',
+      });
+
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+
+/*
+ * LINKEDIN OAUTH START
+ *
+ * Protected route.
+ *
+ * Angular calls this through HttpClient
+ * so the JWT interceptor can authenticate
+ * the current user.
+ */
+router.post(
+  '/oauth/linkedin/start',
+  requireAuth,
+  async (
+    req,
+    res,
+    next,
+  ) => {
+
+    try {
+
+      const user =
+        await User.findById(
+          req.auth!.userId,
+        )
+          .select(
+            'businessId accountId',
+          )
+          .lean();
+
+      if (!user?.businessId) {
+        return res.status(409).json({
+          message:
+            'Your business account is not configured.',
+        });
+      }
+
+      if (
+        user.accountId ===
+          undefined ||
+        user.accountId ===
+          null ||
+        !String(
+          user.accountId,
+        ).trim()
+      ) {
+        return res.status(409).json({
+          message:
+            'Your account ID is not configured.',
+        });
+      }
+
+      const authorizationUrl =
+        await createLinkedInOAuthStart({
+          userId:
+            String(
+              req.auth!.userId,
+            ),
+
+          businessId:
+            String(
+              user.businessId,
+            ),
+
+          accountId:
+            user.accountId,
+        });
+
+      return res.json({
+        authorizationUrl,
+      });
+
     } catch (error) {
       return next(error);
     }
@@ -606,11 +677,8 @@ router.post(
  *
  * Public route.
  *
- * LinkedIn redirects the browser here,
- * therefore JWT authentication is NOT used
- * on this callback.
- *
- * OAuth state authenticates the flow.
+ * OAuth state stored in MongoDB is used
+ * to identify the authenticated user.
  */
 router.get(
   '/oauth/linkedin/callback',
@@ -618,28 +686,28 @@ router.get(
     req,
     res,
   ) => {
+
     const code =
-      clean(req.query.code);
-
-    const state =
-      clean(req.query.state);
-
-    const error =
-      clean(req.query.error);
-
-    const errorDescription =
       clean(
-        req.query.error_description,
+        req.query.code,
       );
 
-    if (error) {
+    const state =
+      clean(
+        req.query.state,
+      );
+
+    const oauthError =
+      clean(
+        req.query.error_description ||
+        req.query.error,
+      );
+
+    if (oauthError) {
       return res.redirect(
         frontendCallback(
           'error',
-
-          errorDescription ||
-            error,
-
+          oauthError,
           'linkedin',
         ),
       );
@@ -649,15 +717,14 @@ router.get(
       return res.redirect(
         frontendCallback(
           'error',
-
-          'LinkedIn OAuth code or state is missing.',
-
+          'LinkedIn did not return a valid OAuth response.',
           'linkedin',
         ),
       );
     }
 
     try {
+
       await handleLinkedInOAuthCallback(
         code,
         state,
@@ -666,23 +733,24 @@ router.get(
       return res.redirect(
         frontendCallback(
           'connected',
-
-          'LinkedIn connected successfully.',
-
+          undefined,
           'linkedin',
         ),
       );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'LinkedIn connection failed.';
+
+    } catch (error: any) {
+
+      console.error(
+        '[SOCIAL][LINKEDIN OAUTH]',
+        error,
+      );
 
       return res.redirect(
         frontendCallback(
           'error',
 
-          message,
+          error?.message ||
+          'LinkedIn connection failed.',
 
           'linkedin',
         ),
@@ -703,7 +771,9 @@ router.delete(
     res,
     next,
   ) => {
+
     try {
+
       const user =
         await User.findById(
           req.auth!.userId,
@@ -720,19 +790,10 @@ router.delete(
         });
       }
 
-      const id =
-        clean(req.params.id);
-
-      if (!id) {
-        return res.status(400).json({
-          message:
-            'Social account ID is required.',
-        });
-      }
-
       const account =
         await SocialAccount.findOne({
-          _id: id,
+          _id:
+            req.params.id,
 
           userId:
             req.auth!.userId,
@@ -748,14 +809,22 @@ router.delete(
         });
       }
 
-      await SocialAccount.deleteOne({
-        _id: account._id,
-      });
+      account.status =
+        'Not Connected';
+
+      account.accessTokenEncrypted =
+        '';
+
+      account.tokenExpiresAt =
+        null;
+
+      await account.save();
 
       return res.json({
         message:
-          'Social account disconnected successfully.',
+          'Social account disconnected.',
       });
+
     } catch (error) {
       return next(error);
     }

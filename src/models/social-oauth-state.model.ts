@@ -7,7 +7,9 @@ export type SocialOAuthProvider =
 
 export interface ISocialOAuthState {
   stateHash: string;
+
   userId: Types.ObjectId;
+
   businessId: Types.ObjectId;
 
   provider: SocialOAuthProvider;
@@ -15,12 +17,15 @@ export interface ISocialOAuthState {
   encryptedData?: string;
 
   expiresAt: Date;
+
   usedAt?: Date | null;
 
   selectionTokenHash?: string;
+
   selectionExpiresAt?: Date | null;
 
   createdAt?: Date;
+
   updatedAt?: Date;
 }
 
@@ -29,58 +34,81 @@ const socialOAuthStateSchema =
     {
       stateHash: {
         type: String,
+
         required: true,
+
         unique: true,
+
         index: true,
       },
 
       userId: {
         type: Schema.Types.ObjectId,
+
         ref: 'User',
+
         required: true,
+
         index: true,
       },
 
       businessId: {
         type: Schema.Types.ObjectId,
+
         ref: 'Business',
+
         required: true,
+
         index: true,
       },
 
       provider: {
         type: String,
-        enum: ['facebook', 'instagram'],
+
+        enum: [
+          'facebook',
+          'instagram',
+          'linkedin',
+        ],
+
         required: true,
+
         index: true,
       },
 
       encryptedData: {
         type: String,
+
         default: '',
       },
 
       expiresAt: {
         type: Date,
+
         required: true,
       },
 
       usedAt: {
         type: Date,
+
         default: null,
       },
 
       selectionTokenHash: {
         type: String,
+
         default: '',
+
         index: true,
       },
 
       selectionExpiresAt: {
         type: Date,
+
         default: null,
       },
     },
+
     {
       timestamps: true,
     },
@@ -89,12 +117,17 @@ const socialOAuthStateSchema =
 /*
  * MongoDB TTL index.
  *
- * Do NOT add index:true to expiresAt above.
- * Otherwise MongoDB can create duplicate indexes.
+ * OAuth state documents are automatically
+ * removed after expiresAt.
  */
 socialOAuthStateSchema.index(
-  { expiresAt: 1 },
-  { expireAfterSeconds: 0 },
+  {
+    expiresAt: 1,
+  },
+
+  {
+    expireAfterSeconds: 0,
+  },
 );
 
 export const SocialOAuthState =

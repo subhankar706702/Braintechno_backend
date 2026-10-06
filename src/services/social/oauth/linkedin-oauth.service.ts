@@ -1,37 +1,17 @@
 import crypto from 'node:crypto';
 
 import { env } from '../../../config/env';
+
 import { User } from '../../../models/user.model';
+
 import { SocialAccount } from '../../../models/social-account.model';
+
 import { SocialOAuthState } from '../../../models/social-oauth-state.model';
+
 import { encryptSocialToken } from '../../../utils/social/token-crypto';
 
-interface LinkedInTokenResponse {
-  access_token?: string;
-  expires_in?: number;
-  refresh_token?: string;
-  refresh_token_expires_in?: number;
 
-  error?: string;
-  error_description?: string;
-}
-
-interface LinkedInUserInfoResponse {
-  sub?: string;
-  name?: string;
-  given_name?: string;
-  family_name?: string;
-  picture?: string;
-  locale?: {
-    country?: string;
-    language?: string;
-  };
-
-  email?: string;
-  email_verified?: boolean;
-}
-
-const LINKEDIN_AUTHORIZE_URL =
+const LINKEDIN_AUTHORIZATION_URL =
   'https://www.linkedin.com/oauth/v2/authorization';
 
 const LINKEDIN_TOKEN_URL =
@@ -40,357 +20,482 @@ const LINKEDIN_TOKEN_URL =
 const LINKEDIN_USERINFO_URL =
   'https://api.linkedin.com/v2/userinfo';
 
-const hashValue = (value: string): string => {
-  return crypto
-    .createHash('sha256')
-    .update(value)
-    .digest('hex');
-};
+const STATE_TTL_MS =
+  10 * 60 * 1000;
 
-const getLinkedInErrorMessage = (
-  body: LinkedInTokenResponse | LinkedInUserInfoResponse,
-): string => {
-  if ('error_description' in body && body.error_description) {
-    return body.error_description;
-  }
 
-  if ('error' in body && body.error) {
-    return body.error;
-  }
-
-  return 'LinkedIn API request failed.';
-};
-
-const assertLinkedInConfigured = (): void => {
-  if (
-    !env.linkedinClientId ||
-    !env.linkedinClientSecret ||
-    !env.linkedinRedirectUri
-  ) {
-    throw Object.assign(
-      new Error(
-        'LinkedIn OAuth is not configured. Set LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET and LINKEDIN_REDIRECT_URI in the backend .env.',
-      ),
-      {
-        status: 503,
-      },
-    );
-  }
-
-  if (!env.socialTokenEncryptionKey) {
-    throw Object.assign(
-      new Error(
-        'SOCIAL_TOKEN_ENCRYPTION_KEY is not configured.',
-      ),
-      {
-        status: 503,
-      },
-    );
-  }
-};
-
-export const createLinkedInOAuthStart = async (input: {
+interface LinkedInOAuthStartInput {
   userId: string;
+
   businessId: string;
-  accountId?: string | number;
-}): Promise<string> => {
-  assertLinkedInConfigured();
 
-  const rawState =
-    crypto.randomBytes(32).toString('base64url');
+  accountId?: unknown;
+}
 
-  const stateHash = hashValue(rawState);
 
-  await SocialOAuthState.create({
-    stateHash,
+interface LinkedInTokenResponse {
+  access_token?: string;
 
-    userId: input.userId,
+  expires_in?: number;
 
-    businessId: input.businessId,
+  refresh_token?: string;
 
-    provider: 'linkedin',
+  refresh_token_expires_in?: number;
 
-    expiresAt: new Date(
-      Date.now() + 10 * 60 * 1000,
-    ),
-  });
+  scope?: string;
 
-  const params = new URLSearchParams({
-    response_type: 'code',
+  token_type?: string;
+}
 
-    client_id:
-      env.linkedinClientId,
 
-    redirect_uri:
-      env.linkedinRedirectUri,
+interface LinkedInUserInfo {
+  sub?: string;
 
-    state: rawState,
+  name?: string;
 
-    scope:
-      env.linkedinOAuthScopes,
-  });
+  given_name?: string;
 
-  return (
-    `${LINKEDIN_AUTHORIZE_URL}?` +
-    params.toString()
-  );
-};
+  family_name?: string;
 
-const exchangeCodeForToken = async (
-  code: string,
-): Promise<LinkedInTokenResponse> => {
-  const body =
-    new URLSearchParams({
-      grant_type:
-        'authorization_code',
+  email?: string;
 
+  picture?: string;
+}
+
+
+interface LinkedInOAuthContext {
+  userId: string;
+
+  businessId: string;
+
+  accountId: string;
+}
+
+
+/*
+ * Validate required LinkedIn configuration.
+ */
+const getRequiredLinkedInConfig =
+  (): void => {
+    if (!env.linkedinClientId) {
+      throw new Error(
+        'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_ID is missing.',
+      );
+    }
+
+    if (!env.linkedinClientSecret) {
+      throw new Error(
+        'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_SECRET is missing.',
+      );
+    }
+
+    if (!env.linkedinRedirectUri) {
+      throw new Error(
+        'LinkedIn OAuth is not configured: LINKEDIN_REDIRECT_URI is missing.',
+      );
+    }
+
+    if (!env.socialTokenEncryptionKey) {
+      throw new Error(
+        'Social token encryption is not configured: SOCIAL_TOKEN_ENCRYPTION_KEY is missing.',
+      );
+    }
+  };
+
+
+/*
+ * SHA-256 hash for OAuth state.
+ *
+ * Raw state is never stored in MongoDB.
+ */
+const createStateHash =
+  (
+    state: string,
+  ): string => {
+    return crypto
+      .createHash('sha256')
+      .update(state)
+      .digest('hex');
+  };
+
+
+/*
+ * Cryptographically secure OAuth state.
+ */
+const createRandomState =
+  (): string => {
+    return crypto
+      .randomBytes(32)
+      .toString('hex');
+  };
+
+
+/*
+ * Normalize configured LinkedIn scopes.
+ */
+const getLinkedInScopes =
+  (): string => {
+    return env.linkedinOAuthScopes
+      .split(/\s+/)
+      .map(
+        scope =>
+          scope.trim(),
+      )
+      .filter(Boolean)
+      .join(' ');
+  };
+
+
+/*
+ * Resolve user/business context.
+ */
+const getUserContext =
+  async (
+    userId: string,
+    businessId?: string,
+    accountId?: unknown,
+  ): Promise<LinkedInOAuthContext> => {
+
+    const user =
+      await User.findById(
+        userId,
+      )
+        .select(
+          '_id businessId accountId',
+        )
+        .lean();
+
+    if (!user) {
+      throw new Error(
+        'User not found.',
+      );
+    }
+
+    const resolvedBusinessId =
+      businessId ||
+      (
+        user.businessId
+          ? String(
+              user.businessId,
+            )
+          : ''
+      );
+
+    if (!resolvedBusinessId) {
+      throw new Error(
+        'Business account is not configured for this user.',
+      );
+    }
+
+    const resolvedAccountId =
+      accountId !== undefined &&
+      accountId !== null &&
+      String(accountId).trim()
+        ? String(accountId).trim()
+        : String(
+            user.accountId || '',
+          ).trim();
+
+    if (!resolvedAccountId) {
+      throw new Error(
+        'Account ID is not configured for this user.',
+      );
+    }
+
+    return {
+      userId:
+        String(
+          user._id,
+        ),
+
+      businessId:
+        resolvedBusinessId,
+
+      accountId:
+        resolvedAccountId,
+    };
+  };
+
+
+/*
+ * Exchange LinkedIn authorization code
+ * for access token.
+ */
+const exchangeCodeForToken =
+  async (
+    code: string,
+  ): Promise<LinkedInTokenResponse> => {
+
+    const body =
+      new URLSearchParams();
+
+    body.set(
+      'grant_type',
+      'authorization_code',
+    );
+
+    body.set(
+      'code',
       code,
+    );
 
-      client_id:
-        env.linkedinClientId,
+    body.set(
+      'redirect_uri',
+      env.linkedinRedirectUri,
+    );
 
-      client_secret:
-        env.linkedinClientSecret,
+    body.set(
+      'client_id',
+      env.linkedinClientId,
+    );
 
-      redirect_uri:
-        env.linkedinRedirectUri,
+    body.set(
+      'client_secret',
+      env.linkedinClientSecret,
+    );
+
+    const response =
+      await fetch(
+        LINKEDIN_TOKEN_URL,
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/x-www-form-urlencoded',
+
+            Accept:
+              'application/json',
+          },
+
+          body:
+            body.toString(),
+        },
+      );
+
+    const responseText =
+      await response.text();
+
+    let responseData:
+      LinkedInTokenResponse & {
+        error?: string;
+
+        error_description?: string;
+      };
+
+    try {
+      responseData =
+        JSON.parse(
+          responseText,
+        ) as typeof responseData;
+    } catch {
+      throw new Error(
+        'LinkedIn token endpoint returned an invalid response.',
+      );
+    }
+
+    if (
+      !response.ok ||
+      !responseData.access_token
+    ) {
+      throw new Error(
+        responseData.error_description ||
+        responseData.error ||
+        'Unable to exchange LinkedIn authorization code.',
+      );
+    }
+
+    return responseData;
+  };
+
+
+/*
+ * Get authenticated LinkedIn member.
+ */
+const getLinkedInUserInfo =
+  async (
+    accessToken: string,
+  ): Promise<LinkedInUserInfo> => {
+
+    const response =
+      await fetch(
+        LINKEDIN_USERINFO_URL,
+        {
+          method: 'GET',
+
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+
+            Accept:
+              'application/json',
+          },
+        },
+      );
+
+    const responseText =
+      await response.text();
+
+    let data:
+      LinkedInUserInfo & {
+        message?: string;
+
+        error?: string;
+      };
+
+    try {
+      data =
+        JSON.parse(
+          responseText,
+        ) as typeof data;
+    } catch {
+      throw new Error(
+        'LinkedIn userinfo endpoint returned an invalid response.',
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.message ||
+        data.error ||
+        'Unable to retrieve LinkedIn profile.',
+      );
+    }
+
+    if (!data.sub) {
+      throw new Error(
+        'LinkedIn profile ID was not returned.',
+      );
+    }
+
+    return data;
+  };
+
+
+/*
+ * Create LinkedIn OAuth URL.
+ */
+export const createLinkedInOAuthStart =
+  async (
+    input: LinkedInOAuthStartInput,
+  ): Promise<{
+    authorizationUrl: string;
+  }> => {
+
+    getRequiredLinkedInConfig();
+
+    const context =
+      await getUserContext(
+        input.userId,
+        input.businessId,
+        input.accountId,
+      );
+
+    const state =
+      createRandomState();
+
+    const stateHash =
+      createStateHash(
+        state,
+      );
+
+    const expiresAt =
+      new Date(
+        Date.now() +
+        STATE_TTL_MS,
+      );
+
+    await SocialOAuthState.create({
+      userId:
+        context.userId,
+
+      businessId:
+        context.businessId,
+
+      provider:
+        'linkedin',
+
+      stateHash,
+
+      expiresAt,
+
+      usedAt:
+        null,
     });
 
-  const response = await fetch(
-    LINKEDIN_TOKEN_URL,
-    {
-      method: 'POST',
+    const params =
+      new URLSearchParams();
 
-      headers: {
-        'Content-Type':
-          'application/x-www-form-urlencoded',
-      },
-
-      body,
-    },
-  );
-
-  const data =
-    (await response.json()) as LinkedInTokenResponse;
-
-  if (
-    !response.ok ||
-    !data.access_token
-  ) {
-    throw Object.assign(
-      new Error(
-        getLinkedInErrorMessage(data),
-      ),
-      {
-        status: 400,
-      },
+    params.set(
+      'response_type',
+      'code',
     );
-  }
 
-  return data;
-};
-
-const getLinkedInUserInfo = async (
-  accessToken: string,
-): Promise<LinkedInUserInfoResponse> => {
-  const response = await fetch(
-    LINKEDIN_USERINFO_URL,
-    {
-      method: 'GET',
-
-      headers: {
-        Authorization:
-          `Bearer ${accessToken}`,
-
-        Accept:
-          'application/json',
-      },
-    },
-  );
-
-  const data =
-    (await response.json()) as LinkedInUserInfoResponse;
-
-  if (
-    !response.ok ||
-    !data.sub
-  ) {
-    throw Object.assign(
-      new Error(
-        getLinkedInErrorMessage(data),
-      ),
-      {
-        status: 400,
-      },
+    params.set(
+      'client_id',
+      env.linkedinClientId,
     );
-  }
 
-  return data;
-};
-
-const saveLinkedInAccount = async (
-  userId: string,
-  businessId: string,
-  profile: LinkedInUserInfoResponse,
-  accessToken: string,
-  expiresIn?: number,
-  refreshToken?: string,
-  refreshTokenExpiresIn?: number,
-): Promise<void> => {
-  if (!profile.sub) {
-    throw new Error(
-      'LinkedIn profile ID was not returned.',
+    params.set(
+      'redirect_uri',
+      env.linkedinRedirectUri,
     );
-  }
 
-  const user =
-    await User.findById(userId)
-      .select('accountId')
-      .lean();
+    params.set(
+      'state',
+      state,
+    );
 
-  const tokenExpiresAt =
-    typeof expiresIn === 'number' &&
-    expiresIn > 0
-      ? new Date(
-          Date.now() +
-          expiresIn * 1000,
-        )
-      : null;
+    params.set(
+      'scope',
+      getLinkedInScopes(),
+    );
 
-  const refreshTokenExpiresAt =
-    typeof refreshTokenExpiresIn === 'number' &&
-    refreshTokenExpiresIn > 0
-      ? new Date(
-          Date.now() +
-          refreshTokenExpiresIn * 1000,
-        )
-      : null;
+    return {
+      authorizationUrl:
+        `${LINKEDIN_AUTHORIZATION_URL}?${params.toString()}`,
+    };
+  };
 
-  const accountName =
-    profile.name ||
-    [
-      profile.given_name,
-      profile.family_name,
-    ]
-      .filter(Boolean)
-      .join(' ') ||
-    'LinkedIn Account';
 
-  await SocialAccount.findOneAndUpdate(
-    {
-      businessId,
-
-      platform:
-        'LinkedIn',
-    },
-
-    {
-      $set: {
-        userId,
-
-        businessId,
-
-        accountId:
-          user?.accountId
-            ? String(user.accountId)
-            : '',
-
-        platform:
-          'LinkedIn',
-
-        externalAccountId:
-          profile.sub,
-
-        accountName,
-
-        pageName:
-          accountName,
-
-        accessTokenEncrypted:
-          encryptSocialToken(
-            accessToken,
-          ),
-
-        tokenExpiresAt,
-
-        status:
-          'Connected',
-
-        metadata: {
-          provider:
-            'linkedin',
-
-          name:
-            profile.name || '',
-
-          givenName:
-            profile.given_name || '',
-
-          familyName:
-            profile.family_name || '',
-
-          picture:
-            profile.picture || '',
-
-          email:
-            profile.email || '',
-
-          emailVerified:
-            profile.email_verified ?? false,
-
-          locale:
-            profile.locale || null,
-
-          refreshTokenEncrypted:
-            refreshToken
-              ? encryptSocialToken(
-                  refreshToken,
-                )
-              : '',
-
-          refreshTokenExpiresAt,
-        },
-      },
-    },
-
-    {
-      upsert: true,
-
-      new: true,
-
-      setDefaultsOnInsert: true,
-    },
-  );
-};
-
+/*
+ * Handle LinkedIn OAuth callback.
+ */
 export const handleLinkedInOAuthCallback =
   async (
     code: string,
-    rawState: string,
-  ): Promise<void> => {
-    assertLinkedInConfigured();
+    state: string,
+  ): Promise<{
+    accountId: string;
 
-    if (!code || !rawState) {
-      throw Object.assign(
-        new Error(
-          'LinkedIn OAuth code or state is missing.',
-        ),
-        {
-          status: 400,
-        },
+    accountName: string;
+  }> => {
+
+    getRequiredLinkedInConfig();
+
+    if (!code) {
+      throw new Error(
+        'LinkedIn authorization code is missing.',
+      );
+    }
+
+    if (!state) {
+      throw new Error(
+        'LinkedIn OAuth state is missing.',
       );
     }
 
     const stateHash =
-      hashValue(rawState);
+      createStateHash(
+        state,
+      );
 
     /*
-     * Atomic state validation.
+     * Atomically consume state.
      *
-     * This prevents the same OAuth state
-     * from being reused.
+     * This prevents callback replay.
      */
-    const state =
+    const oauthState =
       await SocialOAuthState.findOneAndUpdate(
         {
           stateHash,
@@ -398,12 +503,21 @@ export const handleLinkedInOAuthCallback =
           provider:
             'linkedin',
 
-          usedAt:
-            null,
-
           expiresAt: {
             $gt: new Date(),
           },
+
+          $or: [
+            {
+              usedAt: null,
+            },
+
+            {
+              usedAt: {
+                $exists: false,
+              },
+            },
+          ],
         },
 
         {
@@ -416,58 +530,212 @@ export const handleLinkedInOAuthCallback =
         {
           new: true,
         },
-      );
+      ).lean();
 
-    if (!state) {
-      throw Object.assign(
-        new Error(
-          'LinkedIn OAuth state is invalid, expired, or already used.',
-        ),
-        {
-          status: 400,
-        },
+    if (!oauthState) {
+      throw new Error(
+        'LinkedIn OAuth state is invalid or expired.',
       );
     }
 
     try {
-      const token =
+      const context =
+        await getUserContext(
+          String(
+            oauthState.userId,
+          ),
+          String(
+            oauthState.businessId,
+          ),
+        );
+
+      /*
+       * Exchange authorization code.
+       */
+      const tokenData =
         await exchangeCodeForToken(
           code,
         );
 
-      if (!token.access_token) {
+      if (
+        !tokenData.access_token
+      ) {
         throw new Error(
           'LinkedIn access token was not returned.',
         );
       }
 
+      /*
+       * Get LinkedIn member profile.
+       */
       const profile =
         await getLinkedInUserInfo(
-          token.access_token,
+          tokenData.access_token,
         );
 
-      await saveLinkedInAccount(
-        String(state.userId),
+      const accountName =
+        profile.name ||
+        [
+          profile.given_name,
+          profile.family_name,
+        ]
+          .filter(Boolean)
+          .join(' ') ||
+        profile.email ||
+        'LinkedIn Account';
 
-        String(state.businessId),
+      /*
+       * Encrypt access token.
+       */
+      const accessTokenEncrypted =
+        encryptSocialToken(
+          tokenData.access_token,
+        );
 
-        profile,
+      /*
+       * Access token expiration.
+       */
+      const tokenExpiresAt =
+        typeof tokenData.expires_in ===
+        'number'
+          ? new Date(
+              Date.now() +
+              tokenData.expires_in *
+              1000,
+            )
+          : null;
 
-        token.access_token,
+      const metadata:
+        Record<string, unknown> = {
+          provider:
+            'linkedin',
 
-        token.expires_in,
+          memberId:
+            profile.sub,
 
-        token.refresh_token,
+          email:
+            profile.email ||
+            null,
 
-        token.refresh_token_expires_in,
-      );
+          picture:
+            profile.picture ||
+            null,
 
-      await SocialOAuthState.deleteOne({
-        _id: state._id,
-      });
+          scopes:
+            tokenData.scope ||
+            getLinkedInScopes(),
+        };
+
+      /*
+       * Store refresh token encrypted
+       * when LinkedIn provides one.
+       */
+      if (
+        tokenData.refresh_token
+      ) {
+        metadata.refreshTokenEncrypted =
+          encryptSocialToken(
+            tokenData.refresh_token,
+          );
+      }
+
+      if (
+        typeof
+          tokenData.refresh_token_expires_in ===
+        'number'
+      ) {
+        metadata.refreshTokenExpiresAt =
+          new Date(
+            Date.now() +
+            tokenData.refresh_token_expires_in *
+            1000,
+          );
+      }
+
+      /*
+       * Upsert LinkedIn account.
+       *
+       * Existing Facebook and Instagram
+       * accounts are untouched.
+       */
+      const account =
+        await SocialAccount.findOneAndUpdate(
+          {
+            businessId:
+              context.businessId,
+
+            platform:
+              'LinkedIn',
+          },
+
+          {
+            $set: {
+              userId:
+                context.userId,
+
+              businessId:
+                context.businessId,
+
+              accountId:
+                context.accountId,
+
+              platform:
+                'LinkedIn',
+
+              externalAccountId:
+                profile.sub,
+
+              accountName,
+
+              pageName:
+                accountName,
+
+              accessTokenEncrypted,
+
+              tokenExpiresAt,
+
+              status:
+                'Connected',
+
+              metadata,
+            },
+          },
+
+          {
+            new: true,
+
+            upsert: true,
+
+            runValidators: true,
+
+            setDefaultsOnInsert:
+              true,
+          },
+        );
+
+      if (!account) {
+        throw new Error(
+          'Unable to save LinkedIn account.',
+        );
+      }
+
+      return {
+        accountId:
+          String(
+            account._id,
+          ),
+
+        accountName,
+      };
+
     } catch (error) {
+
+      /*
+       * State was already consumed.
+       * Delete it after failed processing.
+       */
       await SocialOAuthState.deleteOne({
-        _id: state._id,
+        stateHash,
       });
 
       throw error;
