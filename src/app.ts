@@ -19,6 +19,7 @@ import messageRoutes from './routes/message.routes';
 import broadcastRoutes from './routes/broadcast.routes';
 import broadcastWalletRoutes from './routes/broadcast-wallet.routes';
 import socialRoutes from './routes/social.routes';
+import socialPostRoutes from './routes/social-post.routes';
 
 export const app = express();
 
@@ -67,6 +68,9 @@ app.use('/api/broadcasts/wallet', broadcastWalletRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/social', socialRoutes);
+app.use('/api/social/posts', socialPostRoutes);
+app.use('/api/social', socialRoutes);
+app.use('/api/social', socialPostRoutes);
 
 // Account-scoped editor media library + hidden template-preview assets.
 app.use('/api/media', mediaRoutes);

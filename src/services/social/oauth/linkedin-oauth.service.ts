@@ -1,15 +1,10 @@
 import crypto from 'node:crypto';
 
 import { env } from '../../../config/env';
-
 import { User } from '../../../models/user.model';
-
 import { SocialAccount } from '../../../models/social-account.model';
-
 import { SocialOAuthState } from '../../../models/social-oauth-state.model';
-
 import { encryptSocialToken } from '../../../utils/social/token-crypto';
-
 
 const LINKEDIN_AUTHORIZATION_URL =
   'https://www.linkedin.com/oauth/v2/authorization';
@@ -23,372 +18,265 @@ const LINKEDIN_USERINFO_URL =
 const STATE_TTL_MS =
   10 * 60 * 1000;
 
-
-interface LinkedInOAuthStartInput {
-  userId: string;
-
-  businessId: string;
-
-  accountId?: unknown;
-}
-
-
 interface LinkedInTokenResponse {
   access_token?: string;
-
   expires_in?: number;
-
   refresh_token?: string;
-
   refresh_token_expires_in?: number;
-
   scope?: string;
-
-  token_type?: string;
 }
-
 
 interface LinkedInUserInfo {
   sub?: string;
-
   name?: string;
-
   given_name?: string;
-
   family_name?: string;
-
   email?: string;
-
   picture?: string;
 }
 
-
 interface LinkedInOAuthContext {
   userId: string;
-
   businessId: string;
-
   accountId: string;
 }
 
+const getRequiredLinkedInConfig = (): void => {
+  if (!env.linkedinClientId) {
+    throw new Error(
+      'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_ID is missing.',
+    );
+  }
 
-/*
- * Validate required LinkedIn configuration.
- */
-const getRequiredLinkedInConfig =
-  (): void => {
-    if (!env.linkedinClientId) {
-      throw new Error(
-        'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_ID is missing.',
-      );
-    }
+  if (!env.linkedinClientSecret) {
+    throw new Error(
+      'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_SECRET is missing.',
+    );
+  }
 
-    if (!env.linkedinClientSecret) {
-      throw new Error(
-        'LinkedIn OAuth is not configured: LINKEDIN_CLIENT_SECRET is missing.',
-      );
-    }
+  if (!env.linkedinRedirectUri) {
+    throw new Error(
+      'LinkedIn OAuth is not configured: LINKEDIN_REDIRECT_URI is missing.',
+    );
+  }
 
-    if (!env.linkedinRedirectUri) {
-      throw new Error(
-        'LinkedIn OAuth is not configured: LINKEDIN_REDIRECT_URI is missing.',
-      );
-    }
+  if (!env.socialTokenEncryptionKey) {
+    throw new Error(
+      'Social token encryption is not configured: SOCIAL_TOKEN_ENCRYPTION_KEY is missing.',
+    );
+  }
+};
 
-    if (!env.socialTokenEncryptionKey) {
-      throw new Error(
-        'Social token encryption is not configured: SOCIAL_TOKEN_ENCRYPTION_KEY is missing.',
-      );
-    }
+const createStateHash = (
+  state: string,
+): string => {
+  return crypto
+    .createHash('sha256')
+    .update(state)
+    .digest('hex');
+};
+
+const createRandomState = (): string => {
+  return crypto.randomBytes(32).toString('hex');
+};
+
+const getLinkedInScopes = (): string => {
+  return env.linkedinOAuthScopes
+    .split(/\s+/)
+    .map(scope => scope.trim())
+    .filter(Boolean)
+    .join(' ');
+};
+
+const getUserContext = async (
+  userId: string,
+): Promise<LinkedInOAuthContext> => {
+  const user = await User.findById(userId)
+    .select('_id businessId accountId')
+    .lean();
+
+  if (!user) {
+    throw new Error('User not found.');
+  }
+
+  if (!user.businessId) {
+    throw new Error(
+      'Business account is not configured for this user.',
+    );
+  }
+
+  if (!user.accountId) {
+    throw new Error(
+      'Account ID is not configured for this user.',
+    );
+  }
+
+  return {
+    userId: String(user._id),
+    businessId: String(user.businessId),
+    accountId: String(user.accountId),
   };
+};
 
+const exchangeCodeForToken = async (
+  code: string,
+): Promise<LinkedInTokenResponse> => {
+  const body = new URLSearchParams();
 
-/*
- * SHA-256 hash for OAuth state.
- *
- * Raw state is never stored in MongoDB.
- */
-const createStateHash =
-  (
-    state: string,
-  ): string => {
-    return crypto
-      .createHash('sha256')
-      .update(state)
-      .digest('hex');
-  };
+  body.set(
+    'grant_type',
+    'authorization_code',
+  );
 
+  body.set(
+    'code',
+    code,
+  );
 
-/*
- * Cryptographically secure OAuth state.
- */
-const createRandomState =
-  (): string => {
-    return crypto
-      .randomBytes(32)
-      .toString('hex');
-  };
+  body.set(
+    'redirect_uri',
+    env.linkedinRedirectUri,
+  );
 
+  body.set(
+    'client_id',
+    env.linkedinClientId,
+  );
 
-/*
- * Normalize configured LinkedIn scopes.
- */
-const getLinkedInScopes =
-  (): string => {
-    return env.linkedinOAuthScopes
-      .split(/\s+/)
-      .map(
-        scope =>
-          scope.trim(),
-      )
-      .filter(Boolean)
-      .join(' ');
-  };
+  body.set(
+    'client_secret',
+    env.linkedinClientSecret,
+  );
 
+  const response =
+    await fetch(
+      LINKEDIN_TOKEN_URL,
+      {
+        method: 'POST',
 
-/*
- * Resolve user/business context.
- */
-const getUserContext =
-  async (
-    userId: string,
-    businessId?: string,
-    accountId?: unknown,
-  ): Promise<LinkedInOAuthContext> => {
+        headers: {
+          'Content-Type':
+            'application/x-www-form-urlencoded',
+          Accept:
+            'application/json',
+        },
 
-    const user =
-      await User.findById(
-        userId,
-      )
-        .select(
-          '_id businessId accountId',
-        )
-        .lean();
+        body:
+          body.toString(),
+      },
+    );
 
-    if (!user) {
-      throw new Error(
-        'User not found.',
-      );
-    }
+  const responseText =
+    await response.text();
 
-    const resolvedBusinessId =
-      businessId ||
-      (
-        user.businessId
-          ? String(
-              user.businessId,
-            )
-          : ''
-      );
-
-    if (!resolvedBusinessId) {
-      throw new Error(
-        'Business account is not configured for this user.',
-      );
-    }
-
-    const resolvedAccountId =
-      accountId !== undefined &&
-      accountId !== null &&
-      String(accountId).trim()
-        ? String(accountId).trim()
-        : String(
-            user.accountId || '',
-          ).trim();
-
-    if (!resolvedAccountId) {
-      throw new Error(
-        'Account ID is not configured for this user.',
-      );
-    }
-
-    return {
-      userId:
-        String(
-          user._id,
-        ),
-
-      businessId:
-        resolvedBusinessId,
-
-      accountId:
-        resolvedAccountId,
+  let responseData:
+    LinkedInTokenResponse & {
+      error?: string;
+      error_description?: string;
     };
-  };
 
-
-/*
- * Exchange LinkedIn authorization code
- * for access token.
- */
-const exchangeCodeForToken =
-  async (
-    code: string,
-  ): Promise<LinkedInTokenResponse> => {
-
-    const body =
-      new URLSearchParams();
-
-    body.set(
-      'grant_type',
-      'authorization_code',
+  try {
+    responseData =
+      JSON.parse(
+        responseText,
+      ) as typeof responseData;
+  } catch {
+    throw new Error(
+      'LinkedIn token endpoint returned an invalid response.',
     );
+  }
 
-    body.set(
-      'code',
-      code,
+  if (
+    !response.ok ||
+    !responseData.access_token
+  ) {
+    throw new Error(
+      responseData.error_description ||
+      responseData.error ||
+      'Unable to exchange LinkedIn authorization code.',
     );
+  }
 
-    body.set(
-      'redirect_uri',
-      env.linkedinRedirectUri,
-    );
+  return responseData;
+};
 
-    body.set(
-      'client_id',
-      env.linkedinClientId,
-    );
+const getLinkedInUserInfo = async (
+  accessToken: string,
+): Promise<LinkedInUserInfo> => {
+  const response =
+    await fetch(
+      LINKEDIN_USERINFO_URL,
+      {
+        method: 'GET',
 
-    body.set(
-      'client_secret',
-      env.linkedinClientSecret,
-    );
+        headers: {
+          Authorization:
+            `Bearer ${accessToken}`,
 
-    const response =
-      await fetch(
-        LINKEDIN_TOKEN_URL,
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type':
-              'application/x-www-form-urlencoded',
-
-            Accept:
-              'application/json',
-          },
-
-          body:
-            body.toString(),
+          Accept:
+            'application/json',
         },
-      );
+      },
+    );
 
-    const responseText =
-      await response.text();
+  const responseText =
+    await response.text();
 
-    let responseData:
-      LinkedInTokenResponse & {
-        error?: string;
+  let data:
+    LinkedInUserInfo & {
+      message?: string;
+      error?: string;
+    };
 
-        error_description?: string;
-      };
+  try {
+    data =
+      JSON.parse(
+        responseText,
+      ) as typeof data;
+  } catch {
+    throw new Error(
+      'LinkedIn userinfo endpoint returned an invalid response.',
+    );
+  }
 
-    try {
-      responseData =
-        JSON.parse(
-          responseText,
-        ) as typeof responseData;
-    } catch {
-      throw new Error(
-        'LinkedIn token endpoint returned an invalid response.',
-      );
-    }
+  if (
+    !response.ok
+  ) {
+    throw new Error(
+      data.message ||
+      data.error ||
+      'Unable to retrieve LinkedIn profile.',
+    );
+  }
 
-    if (
-      !response.ok ||
-      !responseData.access_token
-    ) {
-      throw new Error(
-        responseData.error_description ||
-        responseData.error ||
-        'Unable to exchange LinkedIn authorization code.',
-      );
-    }
+  if (!data.sub) {
+    throw new Error(
+      'LinkedIn profile ID was not returned.',
+    );
+  }
 
-    return responseData;
-  };
+  return data;
+};
 
+const deleteOAuthState = async (
+  stateHash: string,
+): Promise<void> => {
+  await SocialOAuthState.deleteOne({
+    stateHash,
+  });
+};
 
-/*
- * Get authenticated LinkedIn member.
- */
-const getLinkedInUserInfo =
-  async (
-    accessToken: string,
-  ): Promise<LinkedInUserInfo> => {
-
-    const response =
-      await fetch(
-        LINKEDIN_USERINFO_URL,
-        {
-          method: 'GET',
-
-          headers: {
-            Authorization:
-              `Bearer ${accessToken}`,
-
-            Accept:
-              'application/json',
-          },
-        },
-      );
-
-    const responseText =
-      await response.text();
-
-    let data:
-      LinkedInUserInfo & {
-        message?: string;
-
-        error?: string;
-      };
-
-    try {
-      data =
-        JSON.parse(
-          responseText,
-        ) as typeof data;
-    } catch {
-      throw new Error(
-        'LinkedIn userinfo endpoint returned an invalid response.',
-      );
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        data.message ||
-        data.error ||
-        'Unable to retrieve LinkedIn profile.',
-      );
-    }
-
-    if (!data.sub) {
-      throw new Error(
-        'LinkedIn profile ID was not returned.',
-      );
-    }
-
-    return data;
-  };
-
-
-/*
- * Create LinkedIn OAuth URL.
- */
 export const createLinkedInOAuthStart =
   async (
-    input: LinkedInOAuthStartInput,
+    userId: string,
   ): Promise<{
     authorizationUrl: string;
   }> => {
-
     getRequiredLinkedInConfig();
 
     const context =
       await getUserContext(
-        input.userId,
-        input.businessId,
-        input.accountId,
+        userId,
       );
 
     const state =
@@ -418,9 +306,6 @@ export const createLinkedInOAuthStart =
       stateHash,
 
       expiresAt,
-
-      usedAt:
-        null,
     });
 
     const params =
@@ -457,20 +342,14 @@ export const createLinkedInOAuthStart =
     };
   };
 
-
-/*
- * Handle LinkedIn OAuth callback.
- */
 export const handleLinkedInOAuthCallback =
   async (
     code: string,
     state: string,
   ): Promise<{
     accountId: string;
-
     accountName: string;
   }> => {
-
     getRequiredLinkedInConfig();
 
     if (!code) {
@@ -491,9 +370,10 @@ export const handleLinkedInOAuthCallback =
       );
 
     /*
-     * Atomically consume state.
+     * Atomically consume the OAuth state.
      *
-     * This prevents callback replay.
+     * This prevents the same callback
+     * from being processed more than once.
      */
     const oauthState =
       await SocialOAuthState.findOneAndUpdate(
@@ -507,17 +387,9 @@ export const handleLinkedInOAuthCallback =
             $gt: new Date(),
           },
 
-          $or: [
-            {
-              usedAt: null,
-            },
-
-            {
-              usedAt: {
-                $exists: false,
-              },
-            },
-          ],
+          usedAt: {
+            $exists: false,
+          },
         },
 
         {
@@ -544,13 +416,11 @@ export const handleLinkedInOAuthCallback =
           String(
             oauthState.userId,
           ),
-          String(
-            oauthState.businessId,
-          ),
         );
 
       /*
-       * Exchange authorization code.
+       * Exchange authorization code
+       * for LinkedIn access token.
        */
       const tokenData =
         await exchangeCodeForToken(
@@ -566,7 +436,8 @@ export const handleLinkedInOAuthCallback =
       }
 
       /*
-       * Get LinkedIn member profile.
+       * Retrieve the authenticated
+       * LinkedIn member profile.
        */
       const profile =
         await getLinkedInUserInfo(
@@ -585,7 +456,8 @@ export const handleLinkedInOAuthCallback =
         'LinkedIn Account';
 
       /*
-       * Encrypt access token.
+       * Encrypt access token before
+       * storing it in MongoDB.
        */
       const accessTokenEncrypted =
         encryptSocialToken(
@@ -593,43 +465,46 @@ export const handleLinkedInOAuthCallback =
         );
 
       /*
-       * Access token expiration.
+       * LinkedIn access token expiration.
        */
       const tokenExpiresAt =
         typeof tokenData.expires_in ===
-        'number'
+          'number'
           ? new Date(
-              Date.now() +
-              tokenData.expires_in *
-              1000,
-            )
+            Date.now() +
+            tokenData.expires_in *
+            1000,
+          )
           : null;
 
-      const metadata:
-        Record<string, unknown> = {
-          provider:
-            'linkedin',
-
-          memberId:
-            profile.sub,
-
-          email:
-            profile.email ||
-            null,
-
-          picture:
-            profile.picture ||
-            null,
-
-          scopes:
-            tokenData.scope ||
-            getLinkedInScopes(),
-        };
-
       /*
-       * Store refresh token encrypted
-       * when LinkedIn provides one.
+       * Refresh token is stored encrypted
+       * inside metadata when LinkedIn
+       * returns one.
        */
+      const metadata: Record<
+        string,
+        unknown
+      > = {
+        provider:
+          'linkedin',
+
+        memberId:
+          profile.sub,
+
+        email:
+          profile.email ||
+          null,
+
+        picture:
+          profile.picture ||
+          null,
+
+        scopes:
+          tokenData.scope ||
+          getLinkedInScopes(),
+      };
+
       if (
         tokenData.refresh_token
       ) {
@@ -640,8 +515,7 @@ export const handleLinkedInOAuthCallback =
       }
 
       if (
-        typeof
-          tokenData.refresh_token_expires_in ===
+        typeof tokenData.refresh_token_expires_in ===
         'number'
       ) {
         metadata.refreshTokenExpiresAt =
@@ -653,10 +527,9 @@ export const handleLinkedInOAuthCallback =
       }
 
       /*
-       * Upsert LinkedIn account.
-       *
-       * Existing Facebook and Instagram
-       * accounts are untouched.
+       * One LinkedIn connection per
+       * business is maintained by the
+       * existing compound uniqueness rule.
        */
       const account =
         await SocialAccount.findOneAndUpdate(
@@ -727,16 +600,15 @@ export const handleLinkedInOAuthCallback =
 
         accountName,
       };
-
     } catch (error) {
-
       /*
-       * State was already consumed.
-       * Delete it after failed processing.
+       * Callback state has already been
+       * consumed. Do not allow a failed
+       * callback to be replayed.
        */
-      await SocialOAuthState.deleteOne({
+      await deleteOAuthState(
         stateHash,
-      });
+      );
 
       throw error;
     }

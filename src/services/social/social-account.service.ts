@@ -1,211 +1,72 @@
-import {
-  Injectable,
-  inject,
-} from '@angular/core';
+import mongoose from 'mongoose';
+import { SocialAccount, SOCIAL_PLATFORMS, SOCIAL_ACCOUNT_STATUSES, type SocialAccountStatus, type SocialPlatform } from '../../models/social-account.model';
 
-import {
-  HttpClient,
-} from '@angular/common/http';
-
-import {
-  Observable,
-} from 'rxjs';
-
-import {
-  API_BASE_URL,
-} from '../../core/api.config';
-
-
-export type SocialPlatform =
-  | 'Facebook'
-  | 'Instagram'
-  | 'LinkedIn'
-  | 'Google Business Profile';
-
-
-export interface SocialAccount {
-  id: string;
-
-  platform:
-    SocialPlatform;
-
-  accountName: string;
-
-  pageName: string;
-
-  status:
-    | 'Connected'
-    | 'Not Connected'
-    | 'Expired'
-    | 'Error'
-    | string;
-
-  tokenExpiresAt:
-    string | null;
-
-  externalAccountId:
-    string;
+export interface SocialAccountScope { businessId: string; accountId: string | number; }
+export interface SocialAccountResponse {
+  id: string; platform: SocialPlatform; accountName: string; pageName: string; externalAccountId: string;
+  status: SocialAccountStatus; tokenExpiresAt: Date | null; connected: boolean;
 }
 
+export const isSocialPlatform = (value: unknown): value is SocialPlatform =>
+  (SOCIAL_PLATFORMS as readonly string[]).includes(String(value));
 
-interface OAuthStartResponse {
-  authorizationUrl: string;
-}
+const toResponse = (item: any): SocialAccountResponse => ({
+  id: String(item._id),
+  platform: item.platform,
+  accountName: item.accountName || '',
+  pageName: item.pageName || '',
+  externalAccountId: item.externalAccountId || '',
+  status: item.status,
+  tokenExpiresAt: item.tokenExpiresAt || null,
+  connected: item.status === 'Connected',
+});
 
-
-export interface FacebookPageOption {
-  id: string;
-  name: string;
-}
-
-
-@Injectable({
-  providedIn: 'root',
-})
 export class SocialAccountService {
-
-  private readonly http =
-    inject(HttpClient);
-
-  private readonly baseUrl =
-    `${API_BASE_URL}/social`;
-
-
-  /*
-   * ---------------------------------------------------------
-   * GET CONNECTED SOCIAL ACCOUNTS
-   * ---------------------------------------------------------
-   */
-
-  getAccounts():
-    Observable<SocialAccount[]> {
-
-    return this.http.get<
-      SocialAccount[]
-    >(
-      `${this.baseUrl}/accounts`,
-    );
+  static async list(scope: SocialAccountScope): Promise<SocialAccountResponse[]> {
+    const items = await SocialAccount.find({ businessId: scope.businessId, accountId: String(scope.accountId) }).sort({ platform: 1 }).lean();
+    const byPlatform = new Map<string, any>(items.map(item => [item.platform, item]));
+    return SOCIAL_PLATFORMS.map(platform => byPlatform.has(platform) ? toResponse(byPlatform.get(platform)) : {
+      id: '', platform, accountName: '', pageName: '', externalAccountId: '', status: 'Not Connected', tokenExpiresAt: null, connected: false,
+    });
   }
 
-
-  /*
-   * ---------------------------------------------------------
-   * INSTAGRAM OAUTH
-   * ---------------------------------------------------------
-   */
-
-  startInstagramOAuth():
-    Observable<OAuthStartResponse> {
-
-    return this.http.post<
-      OAuthStartResponse
-    >(
-      `${this.baseUrl}/oauth/instagram/start`,
-      {},
-    );
+  static async getByPlatform(scope: SocialAccountScope, platform: SocialPlatform): Promise<SocialAccountResponse | null> {
+    const item = await SocialAccount.findOne({ businessId: scope.businessId, accountId: String(scope.accountId), platform }).lean();
+    return item ? toResponse(item) : null;
   }
 
-
-  /*
-   * ---------------------------------------------------------
-   * FACEBOOK OAUTH
-   * ---------------------------------------------------------
-   */
-
-  startFacebookOAuth():
-    Observable<OAuthStartResponse> {
-
-    return this.http.post<
-      OAuthStartResponse
-    >(
-      `${this.baseUrl}/oauth/facebook/start`,
-      {},
-    );
+  static async connect(scope: SocialAccountScope, input: { platform: SocialPlatform; accountName?: string; pageName?: string; externalAccountId: string }): Promise<SocialAccountResponse> {
+    if (!isSocialPlatform(input.platform)) throw Object.assign(new Error('Invalid social platform.'), { status: 400 });
+    if (!input.externalAccountId.trim()) throw Object.assign(new Error('External account id is required.'), { status: 400 });
+    const item = await SocialAccount.findOneAndUpdate(
+      { businessId: scope.businessId, accountId: String(scope.accountId), platform: input.platform },
+      { $set: { accountName: String(input.accountName || '').trim(), pageName: String(input.pageName || '').trim(), externalAccountId: input.externalAccountId.trim(), status: 'Connected' } },
+      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true },
+    ).lean();
+    if (!item) throw Object.assign(new Error('Social account could not be saved.'), { status: 500 });
+    return toResponse(item);
   }
 
-
-  /*
-   * ---------------------------------------------------------
-   * LINKEDIN OAUTH
-   * ---------------------------------------------------------
-   *
-   * JWT is attached automatically by the existing
-   * Angular auth interceptor because this request uses
-   * HttpClient instead of direct browser navigation.
-   */
-
-  startLinkedInOAuth():
-    Observable<OAuthStartResponse> {
-
-    return this.http.post<
-      OAuthStartResponse
-    >(
-      `${this.baseUrl}/oauth/linkedin/start`,
-      {},
-    );
+  static async update(scope: SocialAccountScope, id: string, input: { accountName?: string; pageName?: string; externalAccountId?: string; status?: SocialAccountStatus; tokenExpiresAt?: Date | null }): Promise<SocialAccountResponse | null> {
+    if (!mongoose.isValidObjectId(id)) throw Object.assign(new Error('Invalid social account id.'), { status: 400 });
+    const set: Record<string, unknown> = {};
+    if (input.accountName !== undefined) set.accountName = String(input.accountName).trim();
+    if (input.pageName !== undefined) set.pageName = String(input.pageName).trim();
+    if (input.externalAccountId !== undefined) set.externalAccountId = String(input.externalAccountId).trim();
+    if (input.status !== undefined && (SOCIAL_ACCOUNT_STATUSES as readonly string[]).includes(input.status)) set.status = input.status;
+    if (input.tokenExpiresAt !== undefined) set.tokenExpiresAt = input.tokenExpiresAt;
+    if (!Object.keys(set).length) throw Object.assign(new Error('No fields were provided for update.'), { status: 400 });
+    const item = await SocialAccount.findOneAndUpdate({ _id: id, businessId: scope.businessId, accountId: String(scope.accountId) }, { $set: set }, { new: true, runValidators: true }).lean();
+    return item ? toResponse(item) : null;
   }
 
-
-  /*
-   * ---------------------------------------------------------
-   * FACEBOOK PAGE SELECTION
-   * ---------------------------------------------------------
-   */
-
-  getFacebookPages(
-    selectionToken: string,
-  ): Observable<{
-    pages: FacebookPageOption[];
-  }> {
-
-    return this.http.get<{
-      pages: FacebookPageOption[];
-    }>(
-      `${this.baseUrl}/oauth/facebook/pages`,
-      {
-        params: {
-          selectionToken,
-        },
-      },
-    );
-  }
-
-
-  selectFacebookPage(
-    selectionToken: string,
-    pageId: string,
-  ): Observable<{
-    message: string;
-  }> {
-
-    return this.http.post<{
-      message: string;
-    }>(
-      `${this.baseUrl}/oauth/facebook/pages/select`,
-      {
-        selectionToken,
-        pageId,
-      },
-    );
-  }
-
-
-  /*
-   * ---------------------------------------------------------
-   * DISCONNECT SOCIAL ACCOUNT
-   * ---------------------------------------------------------
-   */
-
-  disconnectAccount(
-    id: string,
-  ): Observable<{
-    message: string;
-  }> {
-
-    return this.http.delete<{
-      message: string;
-    }>(
-      `${this.baseUrl}/accounts/${encodeURIComponent(id)}`,
-    );
+  static async disconnect(scope: SocialAccountScope, id: string): Promise<SocialAccountResponse | null> {
+    if (!mongoose.isValidObjectId(id)) throw Object.assign(new Error('Invalid social account id.'), { status: 400 });
+    const item = await SocialAccount.findOneAndUpdate(
+      { _id: id, businessId: scope.businessId, accountId: String(scope.accountId) },
+      { $set: { status: 'Not Connected', accessTokenEncrypted: '', tokenExpiresAt: null } },
+      { new: true, runValidators: true },
+    ).lean();
+    return item ? toResponse(item) : null;
   }
 }

@@ -1,690 +1,201 @@
-import { Types } from 'mongoose';
+import mongoose from 'mongoose';
+import { SocialAccount, SOCIAL_PLATFORMS, type SocialPlatform } from '../../models/social-account.model';
+import { SocialPost, type ISocialPost, type SocialPostStatus, type SocialProviderResult } from '../../models/social-post.model';
+import { decryptSocialToken } from '../../utils/social/token-crypto';
+import { FacebookService } from './providers/facebook.service';
+import { InstagramService } from './providers/instagram.service';
+import { LinkedInService } from './providers/linkedin.service';
+import { GoogleBusinessService } from './providers/google-business.service';
+import type { SocialProvider } from './providers/types';
 
-import { User } from '../../models/user.model';
-import {
-  SocialAccount,
-  SOCIAL_PLATFORMS,
-} from '../../models/social-account.model';
+export interface SocialPostScope { userId: string; businessId: string; accountId?: string | number; }
+export interface CreateSocialPostInput {
+  caption?: unknown; link?: unknown; hashtags?: unknown; cta?: unknown; imageUrl?: unknown;
+  platforms?: unknown; platformAdjustments?: unknown; publishedPageId?: unknown; scheduledAt?: unknown;
+}
 
-import {
-  SocialPost,
-  SOCIAL_POST_PLATFORMS,
-  SocialPostPlatform,
-  SocialPostStatus,
-} from '../../models/social-post.model';
-
-const PLATFORM_MAP: Record<
-  string,
-  SocialPostPlatform
-> = {
-  facebook: 'Facebook',
-  instagram: 'Instagram',
-  linkedin: 'LinkedIn',
-  google_business: 'Google Business Profile',
+const clean = (value: unknown): string => String(value ?? '').trim();
+const providers: Record<SocialPlatform, SocialProvider> = {
+  Facebook: new FacebookService(),
+  Instagram: new InstagramService(),
+  LinkedIn: new LinkedInService(),
+  'Google Business Profile': new GoogleBusinessService(),
 };
 
-const normalizePlatform = (
-  value: unknown,
-): SocialPostPlatform | null => {
-  const key = String(value ?? '')
-    .trim()
-    .toLowerCase();
-
-  return PLATFORM_MAP[key] ?? null;
+const validPlatforms = (value: unknown): SocialPlatform[] => {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(item => clean(item)).filter((item): item is SocialPlatform => (SOCIAL_PLATFORMS as readonly string[]).includes(item)))];
 };
 
-const normalizePlatforms = (
-  values: unknown,
-): SocialPostPlatform[] => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
+const scopeQuery = (scope: SocialPostScope) => ({ businessId: scope.businessId, userId: scope.userId, ...(scope.accountId ? { accountId: String(scope.accountId) } : {}) });
 
-  const result: SocialPostPlatform[] = [];
+function assertObjectId(value: string, label: string): void {
+  if (!mongoose.isValidObjectId(value)) throw Object.assign(new Error(`Invalid ${label}.`), { status: 400 });
+}
 
-  for (const value of values) {
-    const normalized =
-      normalizePlatform(value);
+export class SocialPostService {
+  static async createDraft(scope: SocialPostScope, input: CreateSocialPostInput): Promise<ISocialPost> {
+    assertObjectId(scope.userId, 'user id');
+    assertObjectId(scope.businessId, 'business id');
+    const platforms = validPlatforms(input.platforms);
+    if (!platforms.length) throw Object.assign(new Error('Select at least one connected social platform.'), { status: 400 });
 
-    if (
-      normalized &&
-      !result.includes(normalized)
-    ) {
-      result.push(normalized);
-    }
-  }
+    const accounts = await SocialAccount.find({ businessId: scope.businessId, userId: scope.userId, platform: { $in: platforms } }).select('platform status').lean();
+    const missing = platforms.filter(platform => !accounts.some(account => account.platform === platform && account.status === 'Connected'));
+    if (missing.length) throw Object.assign(new Error(`These social accounts are not connected: ${missing.join(', ')}.`), { status: 409 });
 
-  return result;
-};
-
-const getUserContext = async (
-  userId: string,
-) => {
-  const user =
-    await User.findById(userId)
-      .select('businessId accountId')
-      .lean();
-
-  if (!user?.businessId) {
-    throw new Error(
-      'Your business account is not configured.',
-    );
-  }
-
-  return {
-    businessId:
-      String(user.businessId),
-
-    accountId:
-      String(user.accountId ?? ''),
-  };
-};
-
-const ensureConnectedPlatforms = async (
-  userId: string,
-  businessId: string,
-  platforms: SocialPostPlatform[],
-) => {
-  if (!platforms.length) {
-    throw new Error(
-      'Select at least one social platform.',
-    );
-  }
-
-  const connected =
-    await SocialAccount.find({
-      userId,
-      businessId,
-      platform: {
-        $in: platforms,
-      },
-      status: 'Connected',
-    })
-      .select('platform')
-      .lean();
-
-  const connectedPlatforms =
-    new Set(
-      connected.map(
-        item => item.platform,
-      ),
-    );
-
-  const missing =
-    platforms.filter(
-      platform =>
-        !connectedPlatforms.has(
-          platform,
-        ),
-    );
-
-  if (missing.length) {
-    throw new Error(
-      `The following platform(s) are not connected: ${missing.join(', ')}`,
-    );
-  }
-};
-
-const cleanString = (
-  value: unknown,
-  maxLength?: number,
-): string => {
-  const result =
-    String(value ?? '').trim();
-
-  if (
-    maxLength &&
-    result.length > maxLength
-  ) {
-    return result.slice(0, maxLength);
-  }
-
-  return result;
-};
-
-const validateLink = (
-  value: string,
-): void => {
-  if (!value) {
-    return;
-  }
-
-  let parsed: URL;
-
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(
-      'Link must be a valid URL.',
-    );
-  }
-
-  if (
-    parsed.protocol !== 'http:' &&
-    parsed.protocol !== 'https:'
-  ) {
-    throw new Error(
-      'Link must use HTTP or HTTPS.',
-    );
-  }
-};
-
-const buildContent = (
-  body: any,
-) => {
-  const caption =
-    cleanString(
-      body?.content?.caption ??
-        body?.caption,
-      5000,
-    );
-
-  const link =
-    cleanString(
-      body?.content?.link ??
-        body?.link,
-      2000,
-    );
-
-  const hashtags =
-    cleanString(
-      body?.content?.hashtags ??
-        body?.hashtags,
-      2000,
-    );
-
-  const cta =
-    cleanString(
-      body?.content?.cta ??
-        body?.cta,
-      100,
-    );
-
-  validateLink(link);
-
-  return {
-    caption,
-    link,
-    hashtags,
-    cta,
-  };
-};
-
-export const createSocialPost = async ({
-  userId,
-  body,
-  status = 'Draft',
-  scheduledAt,
-}: {
-  userId: string;
-  body: any;
-  status?: SocialPostStatus;
-  scheduledAt?: Date | null;
-}) => {
-  const {
-    businessId,
-    accountId,
-  } =
-    await getUserContext(
-      userId,
-    );
-
-  const requestedPlatforms =
-    Array.isArray(body?.postTo)
-      ? body.postTo
-      : [];
-
-  let platforms =
-    normalizePlatforms(
-      requestedPlatforms,
-    );
-
-  /*
-   * "All Social Media" is resolved against
-   * currently connected accounts.
-   */
-  if (
-    body?.postToAll === true
-  ) {
-    const connected =
-      await SocialAccount.find({
-        userId,
-        businessId,
-        status: 'Connected',
-      })
-        .select('platform')
-        .lean();
-
-    platforms =
-      connected
-        .map(
-          item =>
-            item.platform,
-        )
-        .filter(
-          platform =>
-            SOCIAL_POST_PLATFORMS.includes(
-              platform as any,
-            ),
-        ) as SocialPostPlatform[];
-  }
-
-  await ensureConnectedPlatforms(
-    userId,
-    businessId,
-    platforms,
-  );
-
-  const content =
-    buildContent(body);
-
-  if (
-    status !== 'Draft' &&
-    !content.caption
-  ) {
-    throw new Error(
-      'Caption is required before publishing or scheduling.',
-    );
-  }
-
-  if (
-    status === 'Scheduled'
-  ) {
-    if (!scheduledAt) {
-      throw new Error(
-        'Scheduled date and time are required.',
-      );
-    }
-
-    if (
-      scheduledAt.getTime() <=
-      Date.now()
-    ) {
-      throw new Error(
-        'Scheduled time must be in the future.',
-      );
-    }
-  }
-
-  const imageName =
-    cleanString(
-      body?.media?.original?.name ??
-        body?.imageName,
-      500,
-    );
-
-  const imageUrl =
-    cleanString(
-      body?.media?.original?.url,
-      5000,
-    );
-
-  const post =
-    await SocialPost.create({
-      userId:
-        new Types.ObjectId(
-          userId,
-        ),
-
-      businessId:
-        new Types.ObjectId(
-          businessId,
-        ),
-
-      accountId,
-
-      postTo: platforms,
-
-      content,
-
-      media: {
-        original: {
-          url: imageUrl,
-          name: imageName,
-        },
-      },
-
-      status,
-
-      scheduledAt:
-        scheduledAt ?? null,
-
+    const post = await SocialPost.create({
+      userId: scope.userId,
+      businessId: scope.businessId,
+      accountId: scope.accountId ? String(scope.accountId) : '',
+      caption: clean(input.caption),
+      link: clean(input.link),
+      hashtags: clean(input.hashtags),
+      cta: clean(input.cta),
+      imageUrl: clean(input.imageUrl),
+      platforms,
+      platformAdjustments: input.platformAdjustments && typeof input.platformAdjustments === 'object' ? input.platformAdjustments : {},
+      publishedPageId: clean(input.publishedPageId),
+      status: 'Draft',
+      scheduledAt: null,
       publishedAt: null,
-
-      platformPosts: [],
+      providerResults: [],
     });
-
-  return post;
-};
-
-export const getSocialPosts = async ({
-  userId,
-  status,
-}: {
-  userId: string;
-  status?: SocialPostStatus;
-}) => {
-  const {
-    businessId,
-  } =
-    await getUserContext(
-      userId,
-    );
-
-  const filter: Record<
-    string,
-    unknown
-  > = {
-    userId,
-    businessId,
-  };
-
-  if (status) {
-    filter.status = status;
+    return post;
   }
 
-  return SocialPost.find(
-    filter,
-  )
-    .sort({
-      createdAt: -1,
-    })
-    .lean();
-};
-
-export const getSocialPost = async ({
-  userId,
-  postId,
-}: {
-  userId: string;
-  postId: string;
-}) => {
-  const {
-    businessId,
-  } =
-    await getUserContext(
-      userId,
-    );
-
-  if (
-    !Types.ObjectId.isValid(
-      postId,
-    )
-  ) {
-    throw new Error(
-      'Invalid social post ID.',
-    );
+  static async list(scope: SocialPostScope, filter?: { status?: SocialPostStatus }): Promise<ISocialPost[]> {
+    const query: Record<string, unknown> = scopeQuery(scope);
+    if (filter?.status) query.status = filter.status;
+    return SocialPost.find(query).sort({ createdAt: -1 }).lean();
   }
 
-  const post =
-    await SocialPost.findOne({
-      _id: postId,
-      userId,
-      businessId,
-    }).lean();
-
-  if (!post) {
-    throw new Error(
-      'Social post not found.',
-    );
+  static async get(scope: SocialPostScope, id: string): Promise<ISocialPost | null> {
+    assertObjectId(id, 'post id');
+    return SocialPost.findOne({ _id: id, ...scopeQuery(scope) }).lean();
   }
 
-  return post;
-};
+  static async updateDraft(scope: SocialPostScope, id: string, input: CreateSocialPostInput): Promise<ISocialPost | null> {
+    assertObjectId(id, 'post id');
+    const post = await SocialPost.findOne({ _id: id, ...scopeQuery(scope) });
+    if (!post) return null;
+    if (!['Draft', 'Scheduled', 'Failed'].includes(post.status)) throw Object.assign(new Error('Only draft, scheduled, or failed posts can be edited.'), { status: 409 });
 
-export const updateSocialPost = async ({
-  userId,
-  postId,
-  body,
-}: {
-  userId: string;
-  postId: string;
-  body: any;
-}) => {
-  const {
-    businessId,
-  } =
-    await getUserContext(
-      userId,
-    );
+    const platforms = input.platforms === undefined ? post.platforms : validPlatforms(input.platforms);
+    if (!platforms.length) throw Object.assign(new Error('Select at least one social platform.'), { status: 400 });
+    const accounts = await SocialAccount.find({ businessId: scope.businessId, userId: scope.userId, platform: { $in: platforms } }).select('platform status').lean();
+    const missing = platforms.filter(platform => !accounts.some(account => account.platform === platform && account.status === 'Connected'));
+    if (missing.length) throw Object.assign(new Error(`These social accounts are not connected: ${missing.join(', ')}.`), { status: 409 });
 
-  if (
-    !Types.ObjectId.isValid(
-      postId,
-    )
-  ) {
-    throw new Error(
-      'Invalid social post ID.',
-    );
+    if (input.caption !== undefined) post.caption = clean(input.caption);
+    if (input.link !== undefined) post.link = clean(input.link);
+    if (input.hashtags !== undefined) post.hashtags = clean(input.hashtags);
+    if (input.cta !== undefined) post.cta = clean(input.cta);
+    if (input.imageUrl !== undefined) post.imageUrl = clean(input.imageUrl);
+    if (input.platforms !== undefined) post.platforms = platforms;
+    if (input.platformAdjustments !== undefined) post.platformAdjustments = input.platformAdjustments && typeof input.platformAdjustments === 'object' ? input.platformAdjustments as Record<string, unknown> : {};
+    if (input.publishedPageId !== undefined) post.publishedPageId = clean(input.publishedPageId);
+    if (input.scheduledAt !== undefined) post.scheduledAt = input.scheduledAt ? this.parseFutureDate(input.scheduledAt) : null;
+    if (post.status === 'Scheduled' && !post.scheduledAt) post.status = 'Draft';
+    await post.save();
+    return post.toObject();
   }
 
-  const post =
-    await SocialPost.findOne({
-      _id: postId,
-      userId,
-      businessId,
-    });
-
-  if (!post) {
-    throw new Error(
-      'Social post not found.',
-    );
+  static async schedule(scope: SocialPostScope, id: string, scheduledAtValue: unknown): Promise<ISocialPost> {
+    assertObjectId(id, 'post id');
+    const post = await SocialPost.findOne({ _id: id, ...scopeQuery(scope) });
+    if (!post) throw Object.assign(new Error('Social post not found.'), { status: 404 });
+    if (['Published', 'Publishing', 'Cancelled'].includes(post.status)) throw Object.assign(new Error('This post cannot be scheduled in its current status.'), { status: 409 });
+    post.scheduledAt = this.parseFutureDate(scheduledAtValue);
+    post.status = 'Scheduled';
+    post.providerResults = [];
+    await post.save();
+    return post.toObject();
   }
 
-  if (
-    post.status ===
-      'Published' ||
-    post.status ===
-      'Publishing'
-  ) {
-    throw new Error(
-      'Published or currently publishing posts cannot be edited.',
-    );
+  static async cancel(scope: SocialPostScope, id: string): Promise<ISocialPost> {
+    assertObjectId(id, 'post id');
+    const post = await SocialPost.findOne({ _id: id, ...scopeQuery(scope) });
+    if (!post) throw Object.assign(new Error('Social post not found.'), { status: 404 });
+    if (!['Scheduled', 'Draft', 'Failed'].includes(post.status)) throw Object.assign(new Error('Only scheduled, draft, or failed posts can be cancelled.'), { status: 409 });
+    post.status = 'Cancelled';
+    await post.save();
+    return post.toObject();
   }
 
-  const platforms =
-    normalizePlatforms(
-      body?.postTo,
-    );
-
-  await ensureConnectedPlatforms(
-    userId,
-    businessId,
-    platforms,
-  );
-
-  const content =
-    buildContent(body);
-
-  post.postTo =
-    platforms;
-
-  post.content =
-    content;
-
-  if (
-    body?.media?.original
-  ) {
-    post.media = {
-      original: {
-        url: cleanString(
-          body.media.original.url,
-          5000,
-        ),
-
-        name: cleanString(
-          body.media.original.name,
-          500,
-        ),
-      },
-    };
+  static async publish(scope: SocialPostScope, id: string): Promise<ISocialPost> {
+    assertObjectId(id, 'post id');
+    const post = await SocialPost.findOne({ _id: id, ...scopeQuery(scope) });
+    if (!post) throw Object.assign(new Error('Social post not found.'), { status: 404 });
+    if (['Published', 'Publishing', 'Cancelled'].includes(post.status)) throw Object.assign(new Error('This post cannot be published in its current status.'), { status: 409 });
+    return this.publishRecord(post);
   }
 
-  if (
-    body?.status === 'Scheduled'
-  ) {
-    const scheduledAt =
-      new Date(
-        String(
-          body.scheduledAt ?? '',
-        ),
-      );
-
-    if (
-      Number.isNaN(
-        scheduledAt.getTime(),
-      )
-    ) {
-      throw new Error(
-        'Invalid scheduled date and time.',
-      );
+  static async publishDuePosts(): Promise<number> {
+    const due = await SocialPost.find({ status: 'Scheduled', scheduledAt: { $lte: new Date() } }).sort({ scheduledAt: 1 }).limit(20);
+    let processed = 0;
+    for (const post of due) {
+      try { await this.publishRecord(post); } catch { /* record already updated to Failed */ }
+      processed += 1;
     }
+    return processed;
+  }
 
-    if (
-      scheduledAt.getTime() <=
-      Date.now()
-    ) {
-      throw new Error(
-        'Scheduled time must be in the future.',
-      );
+  private static parseFutureDate(value: unknown): Date {
+    const date = new Date(clean(value));
+    if (!clean(value) || Number.isNaN(date.getTime())) throw Object.assign(new Error('A valid scheduled date and time are required.'), { status: 400 });
+    if (date.getTime() <= Date.now()) throw Object.assign(new Error('Scheduled time must be in the future.'), { status: 400 });
+    return date;
+  }
+
+  private static async publishRecord(post: import('mongoose').HydratedDocument<ISocialPost>): Promise<ISocialPost> {
+    post.status = 'Publishing';
+    await post.save();
+    const results: SocialProviderResult[] = [];
+
+    try {
+      for (const platform of post.platforms) {
+        const account = await SocialAccount.findOne({ businessId: post.businessId, userId: post.userId, platform, status: 'Connected' }).select('+accessTokenEncrypted platform externalAccountId tokenExpiresAt metadata').lean();
+        if (!account) throw new Error(`${platform} account is not connected.`);
+        if (account.tokenExpiresAt && account.tokenExpiresAt.getTime() <= Date.now()) {
+          await SocialAccount.updateOne({ _id: account._id }, { $set: { status: 'Expired' } });
+          throw new Error(`${platform} access token has expired.`);
+        }
+
+        let accessToken: string;
+        try { accessToken = decryptSocialToken(account.accessTokenEncrypted); } catch { throw new Error(`${platform} access token could not be decrypted.`); }
+
+        try {
+          const result = await providers[platform].publish({
+            platform,
+            externalAccountId: account.externalAccountId,
+            accessToken,
+            caption: post.caption,
+            link: post.link,
+            hashtags: post.hashtags,
+            cta: post.cta,
+            imageUrl: post.imageUrl,
+          });
+          results.push({ platform, success: true, providerPostId: result.providerPostId, publishedAt: result.publishedAt });
+        } catch (error: any) {
+          results.push({ platform, success: false, error: error?.message || `${platform} publishing failed.` });
+        }
+      }
+
+      post.providerResults = results;
+      const allSucceeded = results.length === post.platforms.length && results.every(result => result.success);
+      post.status = allSucceeded ? 'Published' : 'Failed';
+      post.publishedAt = allSucceeded ? new Date() : null;
+      post.scheduledAt = null;
+      await post.save();
+      return post.toObject();
+    } catch (error: any) {
+      post.providerResults = results;
+      post.status = 'Failed';
+      post.publishedAt = null;
+      post.scheduledAt = null;
+      await post.save();
+      throw Object.assign(new Error(error?.message || 'Social publishing failed.'), { status: 502 });
     }
-
-    post.scheduledAt =
-      scheduledAt;
-
-    post.status =
-      'Scheduled';
-  } else if (
-    body?.status === 'Draft'
-  ) {
-    post.status =
-      'Draft';
-
-    post.scheduledAt =
-      null;
   }
-
-  await post.save();
-
-  return post.toObject();
-};
-
-export const deleteSocialPost = async ({
-  userId,
-  postId,
-}: {
-  userId: string;
-  postId: string;
-}) => {
-  const {
-    businessId,
-  } =
-    await getUserContext(
-      userId,
-    );
-
-  if (
-    !Types.ObjectId.isValid(
-      postId,
-    )
-  ) {
-    throw new Error(
-      'Invalid social post ID.',
-    );
-  }
-
-  const post =
-    await SocialPost.findOne({
-      _id: postId,
-      userId,
-      businessId,
-    });
-
-  if (!post) {
-    throw new Error(
-      'Social post not found.',
-    );
-  }
-
-  if (
-    post.status ===
-    'Publishing'
-  ) {
-    throw new Error(
-      'Publishing post cannot be deleted.',
-    );
-  }
-
-  await post.deleteOne();
-};
-
-export const scheduleSocialPost = async ({
-  userId,
-  postId,
-  scheduledAt,
-}: {
-  userId: string;
-  postId: string;
-  scheduledAt: Date;
-}) => {
-  const {
-    businessId,
-  } =
-    await getUserContext(
-      userId,
-    );
-
-  if (
-    scheduledAt.getTime() <=
-    Date.now()
-  ) {
-    throw new Error(
-      'Scheduled time must be in the future.',
-    );
-  }
-
-  const post =
-    await SocialPost.findOne({
-      _id: postId,
-      userId,
-      businessId,
-    });
-
-  if (!post) {
-    throw new Error(
-      'Social post not found.',
-    );
-  }
-
-  if (
-    !post.postTo.length
-  ) {
-    throw new Error(
-      'No social platform selected.',
-    );
-  }
-
-  await ensureConnectedPlatforms(
-    userId,
-    businessId,
-    post.postTo,
-  );
-
-  if (
-    !post.content.caption.trim()
-  ) {
-    throw new Error(
-      'Caption is required before scheduling.',
-    );
-  }
-
-  post.status =
-    'Scheduled';
-
-  post.scheduledAt =
-    scheduledAt;
-
-  await post.save();
-
-  return post.toObject();
-};
+}
