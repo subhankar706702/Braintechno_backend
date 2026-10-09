@@ -9,6 +9,7 @@ import { User } from '../models/user.model';
 import { env } from '../config/env';
 import { requireAuth } from '../middleware/auth';
 import { IUser } from '../interface';
+import { createTrialIfEligible } from '../services/subscription.service';
 
 const router = Router();
 
@@ -367,6 +368,11 @@ router.post(
 
         business.ownerId = user._id;
         await business.save();
+
+        await createTrialIfEligible({
+          businessId: String(business._id),
+          accountId: String(accountId)
+        });
 
         return res.status(201).json({
           token: tokenFor(user),
