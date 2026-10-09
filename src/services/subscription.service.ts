@@ -6,16 +6,15 @@ import { getPlanPermissions, type SubscriptionFeature, type SubscriptionPermissi
 export interface SubscriptionContext { businessId: string; accountId: string; }
 export type EffectiveSubscriptionStatus = 'trialing' | 'active' | 'expired' | 'cancelled' | 'missing';
 
+const defaultBilling = () => ({
+  monthly: { baseAmount: 0, actualAmount: 0, discountPercentage: 0, enabled: true },
+  halfYearly: { baseAmount: 0, actualAmount: 0, discountPercentage: 0, enabled: true },
+  yearly: { baseAmount: 0, actualAmount: 0, discountPercentage: 0, enabled: true },
+});
+const defaultPlan = () => ({ enabled: true, billing: defaultBilling() });
 const DEFAULT_SETTINGS: ISubscriptionSettings = {
-  key: 'global',
-  trialEnabled: true,
-  trialDays: 9,
-  gracePeriodHours: 24,
-  plans: {
-    basic: { enabled: true, price: 399, billingCycle: 'monthly' },
-    premium: { enabled: true, price: 799, billingCycle: 'monthly' },
-    custom: { enabled: true, price: null, billingCycle: 'custom' },
-  },
+  key: 'global', trialEnabled: true, trialDays: 9, gracePeriodHours: 24,
+  plans: { basic: defaultPlan(), premium: defaultPlan(), custom: defaultPlan() },
 };
 
 const EMPTY_CUSTOM_REQUIREMENTS: ICustomRequirements = {
@@ -34,17 +33,26 @@ const asBusinessId = (value: string) => {
   return new Types.ObjectId(value);
 };
 
-const mergeSettings = (settings: Partial<ISubscriptionSettings> | null): ISubscriptionSettings => ({
-  ...DEFAULT_SETTINGS,
-  ...(settings ?? {}),
-  plans: {
-    ...DEFAULT_SETTINGS.plans,
-    ...(settings?.plans ?? {}),
-    basic: { ...DEFAULT_SETTINGS.plans.basic, ...(settings?.plans?.basic ?? {}) },
-    premium: { ...DEFAULT_SETTINGS.plans.premium, ...(settings?.plans?.premium ?? {}) },
-    custom: { ...DEFAULT_SETTINGS.plans.custom, ...(settings?.plans?.custom ?? {}) },
-  },
-});
+const mergeSettings = (settings: Partial<ISubscriptionSettings> | null): ISubscriptionSettings => {
+  const rawPlans = settings?.plans as any;
+  const mergePlan = (name: 'basic' | 'premium' | 'custom') => {
+    const raw = rawPlans?.[name] ?? {};
+    const fallback = DEFAULT_SETTINGS.plans[name];
+    const billing = raw.billing ?? {};
+    return {
+      enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
+      billing: {
+        monthly: { ...fallback.billing.monthly, ...(billing.monthly ?? {}) },
+        halfYearly: { ...fallback.billing.halfYearly, ...(billing.halfYearly ?? {}) },
+        yearly: { ...fallback.billing.yearly, ...(billing.yearly ?? {}) },
+      },
+    };
+  };
+  return {
+    ...DEFAULT_SETTINGS, ...(settings ?? {}),
+    plans: { basic: mergePlan('basic'), premium: mergePlan('premium'), custom: mergePlan('custom') },
+  };
+};
 
 export async function getGlobalSubscriptionSettings(): Promise<ISubscriptionSettings> {
   const settings = await SubscriptionSettings.findOneAndUpdate(
@@ -187,16 +195,13 @@ export async function activatePaidSubscription(input: {
   const existing = await Subscription.findOne({ businessId });
   const settings = await getGlobalSubscriptionSettings();
   const planSetting = settings.plans[input.plan];
-
   if (!planSetting.enabled) throw Object.assign(new Error('Selected plan is currently disabled.'), { status: 400 });
-  if (input.plan !== 'custom' && input.billingCycle !== planSetting.billingCycle) {
-    throw Object.assign(new Error('Selected billing cycle is not available for this plan.'), { status: 400 });
-  }
-  if (input.plan === 'custom' || planSetting.price === null) {
-    if (input.amount < 0) throw Object.assign(new Error('Invalid custom amount.'), { status: 400 });
-  } else if (input.amount !== planSetting.price) {
-    throw Object.assign(new Error('Payment amount does not match the current plan price.'), { status: 409 });
-  }
+  if (input.plan !== 'custom') {
+    if (input.billingCycle === 'custom') throw Object.assign(new Error('Invalid billing cycle.'), { status: 400 });
+    const cycle = planSetting.billing[input.billingCycle];
+    if (!cycle?.enabled) throw Object.assign(new Error('Selected billing cycle is currently unavailable.'), { status: 400 });
+    if (cycle.baseAmount <= 0 || input.amount !== cycle.baseAmount) throw Object.assign(new Error('Payment amount does not match the current plan price.'), { status: 409 });
+  } else if (input.amount < 0) throw Object.assign(new Error('Invalid custom amount.'), { status: 400 });
 
   const now = new Date();
   const expiresAt = input.billingCycle === 'custom'

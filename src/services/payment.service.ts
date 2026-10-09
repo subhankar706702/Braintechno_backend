@@ -18,12 +18,12 @@ export async function createPayment(input: CreatePaymentInput): Promise<IPayment
   const settings = await getGlobalSubscriptionSettings();
   const planSetting = settings.plans[input.plan];
   if (!planSetting.enabled) throw Object.assign(new Error('Selected plan is currently unavailable.'), { status: 400 });
-  if (input.plan !== 'custom' && input.billingCycle !== planSetting.billingCycle) throw Object.assign(new Error('Selected billing cycle is not available for this plan.'), { status: 400 });
-  if (input.plan === 'custom' && input.billingCycle !== 'custom') throw Object.assign(new Error('Custom plan requires custom billing cycle.'), { status: 400 });
-  if (planSetting.price === null && input.plan !== 'custom') throw Object.assign(new Error('Selected plan does not have a configured price.'), { status: 400 });
-
-  const amount = planSetting.price ?? 0;
-  if (amount <= 0) throw Object.assign(new Error('Selected plan is not purchasable until a valid price is configured.'), { status: 400 });
+  if (input.plan === 'custom') throw Object.assign(new Error('Custom plan purchases must be arranged with the administrator.'), { status: 400 });
+  if (input.billingCycle === 'custom') throw Object.assign(new Error('Invalid billing cycle.'), { status: 400 });
+  const cycleSetting = planSetting.billing[input.billingCycle];
+  if (!cycleSetting?.enabled) throw Object.assign(new Error('Selected billing cycle is currently unavailable.'), { status: 400 });
+  const amount = cycleSetting.baseAmount;
+  if (!Number.isFinite(amount) || amount <= 0) throw Object.assign(new Error('Selected plan is not purchasable until a valid price is configured.'), { status: 400 });
 
   return Payment.create({
     paymentId: id(),
@@ -61,7 +61,7 @@ export async function markPaymentProcessing(paymentId: string, gatewayOrderId: s
 }
 
 export async function markPaymentSucceeded(input: { paymentId: string; gateway: string; gatewayPaymentId: string; gatewaySignature?: string | null }) {
-  const payment = await Payment.findOne({ paymentId });
+  const payment = await Payment.findOne({ paymentId: input.paymentId });
   if (!payment) throw Object.assign(new Error('Payment not found.'), { status: 404 });
   if (payment.status === 'success') return payment;
   if (payment.status === 'refunded' || payment.status === 'cancelled') throw Object.assign(new Error('Payment cannot be completed from its current state.'), { status: 409 });

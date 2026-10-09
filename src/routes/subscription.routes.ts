@@ -57,8 +57,17 @@ router.patch('/admin/settings', requireAuth, requireAdmin, async (req, res, next
       const plan = plans[name];
       if (!plan) continue;
       if (plan.enabled !== undefined && typeof plan.enabled !== 'boolean') return res.status(400).json({ message: `${name}.enabled must be boolean.` });
-      if (plan.price !== undefined && plan.price !== null && (typeof plan.price !== 'number' || !Number.isFinite(plan.price) || plan.price < 0)) return res.status(400).json({ message: `${name}.price must be null or a non-negative number.` });
-      if (plan.billingCycle !== undefined && !['monthly', 'halfYearly', 'yearly', 'custom'].includes(plan.billingCycle)) return res.status(400).json({ message: `${name}.billingCycle is invalid.` });
+      for (const cycleName of ['monthly', 'halfYearly', 'yearly']) {
+        const cycle = plan.billing?.[cycleName];
+        if (!cycle) continue;
+        for (const field of ['baseAmount', 'actualAmount']) {
+          const value = cycle[field];
+          if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) return res.status(400).json({ message: `${name}.billing.${cycleName}.${field} must be a non-negative number.` });
+        }
+        const discount = cycle.discountPercentage;
+        if (discount !== undefined && (typeof discount !== 'number' || !Number.isFinite(discount) || discount < 0 || discount > 100)) return res.status(400).json({ message: `${name}.billing.${cycleName}.discountPercentage must be between 0 and 100.` });
+        if (cycle.enabled !== undefined && typeof cycle.enabled !== 'boolean') return res.status(400).json({ message: `${name}.billing.${cycleName}.enabled must be boolean.` });
+      }
     }
 
     return res.json(await updateGlobalSubscriptionSettings({ trialEnabled: body.trialEnabled, trialDays: body.trialDays, gracePeriodHours: body.gracePeriodHours, plans }));
