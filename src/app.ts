@@ -22,6 +22,7 @@ import socialRoutes from './routes/social.routes';
 import subscriptionRoutes from './routes/subscription.routes';
 import paymentRoutes from './routes/page.routes';
 import adminSubscriptionPaymentRoutes from './routes/admin-subscription-payment.routes';
+import businessHubRoutes from './routes/business-hub.routes';
 
 export const app = express();
 
@@ -65,6 +66,7 @@ app.use('/api/business-categories', businessCategoryRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/campaign', campaignRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/business-hub', businessHubRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/broadcasts/wallet', broadcastWalletRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
