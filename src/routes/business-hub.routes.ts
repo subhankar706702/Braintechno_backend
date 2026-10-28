@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { BusinessHubTransaction, BUSINESS_TRANSACTION_TYPES, BUSINESS_TRANSACTION_PAYMENT_METHODS } from '../models/business-hub-transaction.model.js';
+import { BusinessHubStock, STOCK_UNITS } from '../models/business-hub-stock.model.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -129,6 +130,74 @@ router.post('/transactions', async (req: Request, res: Response, next: NextFunct
   } catch (error) {
     next(error);
   }
+});
+
+
+function publicStock(item: any) {
+  const threshold = item.lowStockThreshold == null ? 5 : Number(item.lowStockThreshold);
+  const quantity = Number(item.quantity) || 0;
+  return { id: String(item._id), name: item.name, description: item.description ?? '', sku: item.sku ?? '', imageUrl: item.imageUrl ?? '', originalPrice: item.originalPrice, discountPrice: item.discountPrice, gstEnabled: Boolean(item.gstEnabled), gstRate: item.gstRate ?? 0, quantity, unit: item.unit, lowStockThreshold: item.lowStockThreshold ?? null, stockStatus: quantity <= 0 ? 'out-of-stock' : quantity <= threshold ? 'low-stock' : 'in-stock', createdAt: item.createdAt, updatedAt: item.updatedAt };
+}
+
+router.get('/stock', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const context = accountContext(req, res); if (!context) return;
+    const search = cleanText(req.query.search).slice(0, 100);
+    const status = cleanText(req.query.status || 'all');
+    const query: any = { accountId: context.accountId };
+    if (search) query.$or = [{ name: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }, { sku: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }];
+    let items = await BusinessHubStock.find(query).sort({ updatedAt: -1 }).limit(1000).lean();
+    let mapped = items.map(publicStock);
+    if (status === 'low-stock') mapped = mapped.filter((x: any) => x.stockStatus === 'low-stock');
+    if (status === 'out-of-stock') mapped = mapped.filter((x: any) => x.stockStatus === 'out-of-stock');
+    res.json({ items: mapped, total: mapped.length });
+  } catch (error) { next(error); }
+});
+
+router.post('/stock', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const context = accountContext(req, res); if (!context) return;
+    const body = req.body ?? {};
+    const name = cleanText(body.name), description = cleanText(body.description), sku = cleanText(body.sku), imageUrl = cleanText(body.imageUrl);
+    const originalPrice = Number(body.originalPrice), discountPrice = Number(body.discountPrice), quantity = Number(body.quantity);
+    const gstEnabled = Boolean(body.gstEnabled), gstRate = Number(body.gstRate ?? 0), unit = cleanText(body.unit || 'piece');
+    const lowStockThreshold = body.lowStockThreshold === '' || body.lowStockThreshold == null ? null : Number(body.lowStockThreshold);
+    if (!name || name.length > 120) { res.status(400).json({ message: 'Product name is required (up to 120 characters).' }); return; }
+    if (description.length > 1000 || sku.length > 60 || imageUrl.length > 2000) { res.status(400).json({ message: 'Description, SKU or image URL is too long.' }); return; }
+    if (![originalPrice, discountPrice, quantity, gstRate].every(Number.isFinite) || originalPrice < 0 || discountPrice < 0 || quantity < 0 || gstRate < 0 || gstRate > 100) { res.status(400).json({ message: 'Enter valid prices, quantity and GST rate.' }); return; }
+    if (discountPrice > originalPrice) { res.status(400).json({ message: 'Discount price cannot exceed original price.' }); return; }
+    if (!(STOCK_UNITS as readonly string[]).includes(unit)) { res.status(400).json({ message: 'Choose a valid unit.' }); return; }
+    if (lowStockThreshold !== null && (!Number.isFinite(lowStockThreshold) || lowStockThreshold < 0)) { res.status(400).json({ message: 'Low-stock threshold must be zero or more.' }); return; }
+    const created = await BusinessHubStock.create({ accountId: context.accountId, userId: context.userId, name, description, sku, imageUrl, originalPrice, discountPrice, gstEnabled, gstRate: gstEnabled ? gstRate : 0, quantity, unit, lowStockThreshold });
+    res.status(201).json(publicStock(created));
+  } catch (error) { next(error); }
+});
+
+router.patch('/stock/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const context = accountContext(req, res); if (!context) return;
+    const allowed = ['name','description','sku','imageUrl','originalPrice','discountPrice','gstEnabled','gstRate','quantity','unit','lowStockThreshold'];
+    const update: any = {};
+    for (const key of allowed) if (Object.prototype.hasOwnProperty.call(req.body ?? {}, key)) update[key] = req.body[key];
+    if (typeof update.name === 'string') update.name = update.name.trim();
+    if (update.name !== undefined && (!update.name || update.name.length > 120)) { res.status(400).json({ message: 'Enter a valid product name.' }); return; }
+    for (const key of ['originalPrice','discountPrice','quantity','gstRate']) if (update[key] !== undefined) { update[key] = Number(update[key]); if (!Number.isFinite(update[key]) || update[key] < 0) { res.status(400).json({ message: `Enter a valid ${key}.` }); return; } }
+    if (update.originalPrice !== undefined && update.discountPrice !== undefined && update.discountPrice > update.originalPrice) { res.status(400).json({ message: 'Discount price cannot exceed original price.' }); return; }
+    if (update.unit !== undefined && !(STOCK_UNITS as readonly string[]).includes(update.unit)) { res.status(400).json({ message: 'Choose a valid unit.' }); return; }
+    if (update.gstEnabled === false) update.gstRate = 0;
+    const saved = await BusinessHubStock.findOneAndUpdate({ _id: req.params.id, accountId: context.accountId }, { $set: update }, { new: true, runValidators: true });
+    if (!saved) { res.status(404).json({ message: 'Product not found.' }); return; }
+    res.json(publicStock(saved));
+  } catch (error) { next(error); }
+});
+
+router.delete('/stock/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const context = accountContext(req, res); if (!context) return;
+    const deleted = await BusinessHubStock.findOneAndDelete({ _id: req.params.id, accountId: context.accountId });
+    if (!deleted) { res.status(404).json({ message: 'Product not found.' }); return; }
+    res.json({ success: true, id: String(deleted._id) });
+  } catch (error) { next(error); }
 });
 
 export default router;
