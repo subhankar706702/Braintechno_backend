@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { BusinessHubTransaction, BUSINESS_TRANSACTION_TYPES, BUSINESS_TRANSACTION_PAYMENT_METHODS } from '../models/business-hub-transaction.model.js';
 import { BusinessHubStock, STOCK_UNITS } from '../models/business-hub-stock.model.js';
 import { BusinessHubSettings } from '../models/business-hub-settings.model.js';
+import invoiceRoutes from './business-hub-invoice.routes.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -482,5 +483,7 @@ router.post('/invoices/preview', async (req: Request, res: Response, next: NextF
   }
 });
 
+
+router.use('/invoices', invoiceRoutes);
 
 export default router;
