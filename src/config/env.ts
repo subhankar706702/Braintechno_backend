@@ -34,7 +34,7 @@ export const env = {
   mongodbUri:
     String(
       process.env.MONGODB_URI ||
-      'mongodb://127.0.0.1:27017/brain-techno',
+      'mongodb://127.0.0.1:27017/brain-techno?replicaSet=rs0'
     ).trim(),
 
   jwtSecret:

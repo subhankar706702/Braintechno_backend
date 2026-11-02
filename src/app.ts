@@ -6,6 +6,7 @@ import { env } from './config/env';
 
 import adminRoutes from './routes/admin.routes';
 import businessHubRoutes from './routes/business-hub.routes';
+import businessHubInvoiceSettingsRoutes from './routes/business-hub-invoice-settings.routes';
 import authRoutes from './routes/auth.routes';
 import businessRoutes from './routes/business.routes';
 import campaignRoutes from './routes/campaign.routes';
@@ -32,20 +33,19 @@ app.use(
   cors({
     origin: env.frontendUrl,
     credentials: true,
-  })
+  }),
 );
 
 app.use(
   express.json({
     limit: '25mb',
-  })
+  }),
 );
 
 // Kept only for legacy URLs that may already exist in stored records.
-// New editor/customer media and template previews are uploaded to R2.
 app.use(
   '/uploads',
-  express.static(path.resolve(process.cwd(), 'uploads'))
+  express.static(path.resolve(process.cwd(), 'uploads')),
 );
 
 app.get('/api/health', (_req, res) =>
@@ -53,12 +53,19 @@ app.get('/api/health', (_req, res) =>
     name: 'BRAIN TECHNO API',
     status: 'ok',
     timezone: 'Asia/Kolkata',
-  })
+  }),
 );
 
 // Routes
 app.use('/api/auth', authRoutes);
+
 app.use('/api/business-hub', businessHubRoutes);
+
+app.use(
+  '/api/business-hub/invoice-settings',
+  businessHubInvoiceSettingsRoutes,
+);
+
 app.use('/api/businesses', businessRoutes);
 app.use('/api/business/profile', businessProfileRoutes);
 app.use('/api/templates', templateRoutes);
@@ -74,7 +81,10 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/payment', paymentRoutes);
-app.use('/api/admin/subscription-payment', adminSubscriptionPaymentRoutes);
+app.use(
+  '/api/admin/subscription-payment',
+  adminSubscriptionPaymentRoutes,
+);
 
 // Account-scoped editor media library + hidden template-preview assets.
 app.use('/api/media', mediaRoutes);
@@ -86,7 +96,7 @@ app.use('/api', uploadRoutes);
 app.use((_req, res) =>
   res.status(404).json({
     message: 'Route not found.',
-  })
+  }),
 );
 
 // Global Error Handler
@@ -95,27 +105,36 @@ app.use(
     error: any,
     _req: express.Request,
     res: express.Response,
-    _next: express.NextFunction
+    _next: express.NextFunction,
   ) => {
     console.error('[BRAIN TECHNO]', error);
 
     const duplicate = error?.code === 11000;
+
     const validation =
-      error?.name === 'ValidationError' || error?.name === 'CastError';
+      error?.name === 'ValidationError' ||
+      error?.name === 'CastError';
+
     const multerError = error?.name === 'MulterError';
 
     return res
       .status(
-        duplicate ? 409 : multerError ? 400 : validation ? 400 : 500
+        duplicate
+          ? 409
+          : multerError
+            ? 400
+            : validation
+              ? 400
+              : 500,
       )
       .json({
         message: duplicate
           ? 'A record with this value already exists.'
           : multerError
-          ? error.message
-          : validation
-          ? error.message
-          : 'Unexpected server error.',
+            ? error.message
+            : validation
+              ? error.message
+              : 'Unexpected server error.',
       });
-  }
+  },
 );
