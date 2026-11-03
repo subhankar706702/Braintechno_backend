@@ -438,7 +438,11 @@ router.post('/invoices/preview', async (req: Request, res: Response, next: NextF
     gstTotal = money(gstTotal);
 
     const taxableAmount = money(subtotal - discountTotal);
-    const total = money(taxableAmount + gstTotal);
+    const unroundedTotal = money(taxableAmount + gstTotal);
+    const unroundedPaise = Math.round(unroundedTotal * 100);
+    const roundedPaise = Math.ceil(unroundedPaise / 500) * 500;
+    const total = money(roundedPaise / 100);
+    const roundOff = money((roundedPaise - unroundedPaise) / 100);
     const paidAmount = Number(body.paymentAmount ?? 0);
 
     if (!Number.isFinite(paidAmount) || paidAmount < 0 || paidAmount > total) {
@@ -473,6 +477,7 @@ router.post('/invoices/preview', async (req: Request, res: Response, next: NextF
         discountTotal,
         taxableAmount,
         gstTotal,
+        roundOff,
         total,
         paidAmount: money(paidAmount),
         dueAmount,

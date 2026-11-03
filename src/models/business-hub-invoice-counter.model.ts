@@ -8,6 +8,8 @@ const invoiceCounterSchema = new Schema(
     sequence: { type: Number, required: true, min: 0, default: 0 },
     prefix: { type: String, required: true, trim: true, maxlength: 20, default: 'BTECH' },
     padding: { type: Number, required: true, min: 1, max: 12, default: 5 },
+    // Small idempotency window for non-persisted full-payment stock sales.
+    stockSaleKeys: { type: [String], default: [] },
   },
   { timestamps: true, versionKey: false },
 );

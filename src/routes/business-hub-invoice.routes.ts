@@ -11,6 +11,7 @@ import { BusinessHubStock } from '../models/business-hub-stock.model.js';
 import { BusinessHubInvoice } from '../models/business-hub-invoice.model.js';
 import { BusinessHubDueRecord } from '../models/business-hub-due-record.model.js';
 import { BusinessHubInvoiceCounter } from '../models/business-hub-invoice-counter.model.js';
+import { Customer } from '../models/customer.model.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -64,9 +65,11 @@ function publicInvoice(invoice: any) {
     },
     paymentMethod: invoice.paymentMethod,
     notes: invoice.notes ?? '',
+    customerId: invoice.customerId ? String(invoice.customerId) : undefined,
     dueRecordId: invoice.dueRecordId
       ? String(invoice.dueRecordId)
       : undefined,
+    persisted: true,
   };
 }
 
@@ -80,10 +83,13 @@ function calculateTotals(
   const taxableAmount = money(Math.max(0, subtotal - discountTotal));
   const gstTotal = money(gstValue);
 
-  // Preserve paise in invoice total.
-  // Example: ₹2374.40 must remain ₹2374.40.
-  const total = money(taxableAmount + gstTotal);
-  const roundOff = 0;
+  // Round upward to the next Rs. 5 multiple. The adjustment is always
+  // between Rs. 0.00 and Rs. 4.99, and exact multiples remain unchanged.
+  const unroundedTotal = money(taxableAmount + gstTotal);
+  const unroundedPaise = Math.round(unroundedTotal * 100);
+  const roundedPaise = Math.ceil(unroundedPaise / 500) * 500;
+  const total = money(roundedPaise / 100);
+  const roundOff = money((roundedPaise - unroundedPaise) / 100);
 
   return {
     subtotal,
@@ -324,6 +330,74 @@ function validateCustomer(raw: any) {
   return customer;
 }
 
+async function upsertInvoiceCustomer(
+  customerData: ReturnType<typeof validateCustomer>,
+  accountId: string,
+  session: any,
+) {
+  const digits = customerData.mobile.replace(/\D/g, '');
+  const normalized = digits.length === 12 && digits.startsWith('91')
+    ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith('0')
+      ? digits.slice(1)
+      : digits.length === 13 && digits.startsWith('091')
+        ? digits.slice(3)
+        : digits;
+
+  if (!normalized || normalized.length < 10 || normalized.length > 15) {
+    throw Object.assign(new Error('Enter a valid customer mobile number.'), { status: 400 });
+  }
+
+  const phoneVariants = [...new Set([
+    normalized,
+    digits,
+    normalized.length === 10 ? `91${normalized}` : normalized,
+    normalized.length === 10 ? `0${normalized}` : normalized,
+  ])];
+
+  let savedCustomer: any = await Customer.findOne({
+    accountId,
+    mobileNormalized: { $in: phoneVariants },
+  }).session(session);
+
+  const normalizedEmail = customerData.email.toLowerCase();
+  const emailOwner = normalizedEmail
+    ? await Customer.findOne({ accountId, emailNormalized: normalizedEmail }).session(session)
+    : null;
+  const canIndexEmail = !emailOwner || (savedCustomer && String(emailOwner._id) === String(savedCustomer._id));
+
+  if (!savedCustomer) {
+    savedCustomer = new Customer({
+      accountId,
+      name: customerData.name,
+      mobile: customerData.mobile,
+      mobileNormalized: normalized,
+      email: customerData.email,
+      emailNormalized: canIndexEmail ? normalizedEmail : '',
+      address: customerData.address,
+      gstin: customerData.gstin,
+      customerType: 'New',
+      source: 'Direct',
+      lastContactAt: new Date(),
+    });
+  } else {
+    // Preserve all existing non-empty customer fields. Only fill blanks.
+    if (!cleanText(savedCustomer.name) && customerData.name) savedCustomer.name = customerData.name;
+    if (!cleanText(savedCustomer.mobile) && customerData.mobile) savedCustomer.mobile = customerData.mobile;
+    if (!cleanText(savedCustomer.mobileNormalized)) savedCustomer.mobileNormalized = normalized;
+    if (!cleanText(savedCustomer.email) && customerData.email) {
+      savedCustomer.email = customerData.email;
+      savedCustomer.emailNormalized = canIndexEmail ? normalizedEmail : '';
+    }
+    if (!cleanText(savedCustomer.address) && customerData.address) savedCustomer.address = customerData.address;
+    if (!cleanText(savedCustomer.gstin) && customerData.gstin) savedCustomer.gstin = customerData.gstin;
+    savedCustomer.lastContactAt = new Date();
+  }
+
+  await savedCustomer.save({ session });
+  return savedCustomer;
+}
+
 // ---------------------------------------------------------
 // PREVIEW INVOICE
 // ---------------------------------------------------------
@@ -402,6 +476,135 @@ router.post(
         return;
       }
 
+      next(error);
+    }
+  },
+);
+
+// ---------------------------------------------------------
+// FINALIZE FULL-PAYMENT SALE WITHOUT PERSISTING INVOICE/CUSTOMER DATA
+// ---------------------------------------------------------
+router.post(
+  '/finalize-stock-only',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const context = getContext(req, res);
+    if (!context) return;
+
+    const body = req.body ?? {};
+    const idempotencyKey = cleanText(body.idempotencyKey);
+    if (!idempotencyKey || idempotencyKey.length > 150) {
+      res.status(400).json({ message: 'A valid idempotency key is required.' });
+      return;
+    }
+
+    try {
+      if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 100) {
+        res.status(400).json({ message: 'Add between 1 and 100 product lines.' });
+        return;
+      }
+
+      const paymentMethod = validatePaymentMethod(body.paymentMethod);
+      if (!paymentMethod) {
+        res.status(400).json({ message: 'Select a valid payment method.' });
+        return;
+      }
+
+      const customer = validateCustomer(body.customer);
+      const notes = cleanText(body.notes);
+      if (notes.length > 2000) {
+        res.status(400).json({ message: 'Invoice notes must be 2,000 characters or fewer.' });
+        return;
+      }
+
+      const preferences = invoiceNumberPreferences(body);
+      const session = await startSession();
+      let result: any = null;
+
+      try {
+        await session.withTransaction(async () => {
+          const priorStockSale = await BusinessHubInvoiceCounter.findOne({
+            accountId: context.accountId,
+            year: 'ALL',
+            stockSaleKeys: idempotencyKey,
+          }).session(session).lean();
+
+          if (priorStockSale) {
+            throw Object.assign(
+              new Error('This full-payment sale was already processed. Do not finalize it again.'),
+              { status: 409 },
+            );
+          }
+
+          const { items, calculation: base } = await buildInvoiceLines(
+            body.items, context.accountId, session, true,
+          );
+          const paidAmount = money(Number(body.paymentAmount ?? 0));
+          if (!Number.isFinite(Number(body.paymentAmount ?? 0)) || paidAmount !== base.total) {
+            throw Object.assign(
+              new Error('Full-payment finalization requires the exact invoice total.'),
+              { status: 400 },
+            );
+          }
+
+          const counter: any = await BusinessHubInvoiceCounter.findOneAndUpdate(
+            { accountId: context.accountId, year: 'ALL' },
+            [{
+              $set: {
+                accountId: context.accountId,
+                year: 'ALL',
+                sequence: {
+                  $add: [
+                    { $ifNull: ['$sequence', preferences.startNumber - 1] },
+                    1,
+                  ],
+                },
+                prefix: preferences.prefix,
+                padding: preferences.padding,
+                stockSaleKeys: {
+                  $slice: [
+                    {
+                      $concatArrays: [
+                        { $ifNull: ['$stockSaleKeys', []] },
+                        [idempotencyKey],
+                      ],
+                    },
+                    -100,
+                  ],
+                },
+              },
+            }],
+            { upsert: true, returnDocument: 'after', updatePipeline: true, session } as any,
+          ).lean();
+
+          const invoiceNumber = `${preferences.prefix}${String(counter.sequence).padStart(preferences.padding, '0')}`;
+          const invoiceDate = new Date();
+          result = {
+            id: `local-${new Types.ObjectId().toString()}`,
+            invoiceNumber,
+            invoiceDate,
+            customer,
+            items: items.map(({ availableQuantity: _availableQuantity, ...item }) => item),
+            calculation: { ...base, paidAmount, dueAmount: 0 },
+            paymentMethod,
+            notes,
+            persisted: false,
+          };
+        });
+      } finally {
+        await session.endSession();
+      }
+
+      if (!result) {
+        res.status(500).json({ message: 'Sale could not be finalized.' });
+        return;
+      }
+
+      res.status(200).json(result);
+    } catch (error: any) {
+      if (error?.status) {
+        res.status(error.status).json({ message: error.message });
+        return;
+      }
       next(error);
     }
   },
@@ -508,7 +711,14 @@ router.post(
             base.total - normalizedPaidAmount,
           );
 
-          if (dueAmount > 0 && (!customer.name || !customer.mobile)) {
+          if (dueAmount <= 0) {
+            throw Object.assign(
+              new Error('Fully paid invoices are generated without database storage. Use the stock-only finalization flow.'),
+              { status: 400 },
+            );
+          }
+
+          if (!customer.name || !customer.mobile) {
             throw Object.assign(
               new Error(
                 'Customer name and mobile are required when payment is due.',
@@ -558,6 +768,10 @@ router.post(
               '0',
             )}`;
 
+          const savedCustomer = await upsertInvoiceCustomer(
+            customer, context.accountId, session,
+          );
+
           const calculation = {
             ...base,
             paidAmount: normalizedPaidAmount,
@@ -573,7 +787,9 @@ router.post(
                 idempotencyKey,
                 status: 'finalized',
                 invoiceDate: new Date(),
+                customerId: savedCustomer._id,
                 customer,
+                settledAt: null,
                 items: items.map(
                   ({ availableQuantity: _availableQuantity, ...item }) =>
                     item,
@@ -609,11 +825,13 @@ router.post(
                     userId: context.userId,
                     invoiceId: invoice._id,
                     invoiceNumber,
+                    customerId: savedCustomer._id,
                     customer: {
                       name: customer.name,
                       mobile: customer.mobile,
                       email: customer.email,
                       address: customer.address,
+                      gstin: customer.gstin,
                     },
                     invoiceTotal: base.total,
                     amountPaid: normalizedPaidAmount,
@@ -873,6 +1091,19 @@ router.post(
               : null;
 
           await record.save({ session });
+
+          const linkedInvoice: any = await BusinessHubInvoice.findOne({
+            _id: record.invoiceId,
+            accountId: context.accountId,
+          }).session(session);
+
+          if (linkedInvoice) {
+            linkedInvoice.calculation.paidAmount = record.amountPaid;
+            linkedInvoice.calculation.dueAmount = record.balanceDue;
+            linkedInvoice.settledAt = record.status === 'paid' ? record.settledAt : null;
+            await linkedInvoice.save({ session });
+          }
+
           updated = record.toObject();
         });
       } finally {

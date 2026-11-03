@@ -53,6 +53,8 @@ const invoiceSchema = new Schema(
     idempotencyKey: { type: String, required: true, trim: true, maxlength: 150 },
     status: { type: String, enum: ['finalized', 'cancelled'], default: 'finalized', required: true },
     invoiceDate: { type: Date, required: true, default: Date.now },
+    customerId: { type: Schema.Types.ObjectId, ref: 'Customer', default: null, index: true },
+    settledAt: { type: Date, default: null, index: true },
     customer: { type: invoiceCustomerSchema, required: true, default: () => ({}) },
     items: {
       type: [invoiceItemSchema],

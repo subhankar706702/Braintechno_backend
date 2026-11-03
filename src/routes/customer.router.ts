@@ -24,8 +24,13 @@ const normalizeSlug = (value: unknown): string =>
 const normalizePhone = (value: unknown): string =>
   cleanText(value).replace(/[^0-9+]/g, '');
 
-const normalizePhoneKey = (value: unknown): string =>
-  normalizePhone(value).replace(/\D/g, '');
+const normalizePhoneKey = (value: unknown): string => {
+  const digits = normalizePhone(value).replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  if (digits.length === 13 && digits.startsWith('091')) return digits.slice(3);
+  return digits;
+};
 
 const normalizeEmail = (value: unknown): string =>
   cleanText(value).toLowerCase();
@@ -47,6 +52,8 @@ const publicCustomer = (item: any) => ({
   name: cleanText(item.name),
   mobile: cleanText(item.mobile),
   email: cleanText(item.email),
+  address: cleanText(item.address),
+  gstin: cleanText(item.gstin),
   customerType: cleanText(item.customerType),
   source: cleanText(item.source),
   image: cleanText(item.image),

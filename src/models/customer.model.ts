@@ -63,6 +63,27 @@ const customerSchema = new Schema(
             index: true
         },
 
+        address: {
+            type: String,
+            default: '',
+            trim: true,
+            maxlength: 1000
+        },
+
+        gstin: {
+            type: String,
+            default: '',
+            trim: true,
+            uppercase: true,
+            maxlength: 15
+        },
+
+        cleanupEligibleAt: {
+            type: Date,
+            default: null,
+            index: true
+        },
+
         email: {
             type: String,
             default: '',
