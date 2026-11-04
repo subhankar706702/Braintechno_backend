@@ -19,12 +19,6 @@ const dueRecordSchema = new Schema(
       required: true,
       index: true,
     },
-    customerId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Customer',
-      default: null,
-      index: true,
-    },
     invoiceNumber: {
       type: String,
       required: true,
@@ -36,7 +30,6 @@ const dueRecordSchema = new Schema(
       mobile: { type: String, required: true, trim: true, maxlength: 20 },
       email: { type: String, trim: true, maxlength: 254, default: '' },
       address: { type: String, trim: true, maxlength: 1000, default: '' },
-      gstin: { type: String, trim: true, uppercase: true, maxlength: 15, default: '' },
     },
     invoiceTotal: {
       type: Number,
@@ -70,6 +63,7 @@ const dueRecordSchema = new Schema(
         },
         paidAt: { type: Date, required: true, default: Date.now },
         note: { type: String, trim: true, maxlength: 500, default: '' },
+        idempotencyKey: { type: String, trim: true, maxlength: 150, default: '' },
       },
     ],
     settledAt: {

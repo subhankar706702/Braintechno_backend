@@ -1,3 +1,4 @@
+
 import {
   Router,
   type Request,
@@ -25,12 +26,27 @@ const DEFAULT_INVOICE_SETTINGS = {
   email: '',
   state: '',
   footer: '',
+  invoicePrefix: 'BTECH',
+  invoiceStartNumber: 1,
+  invoiceNumberPadding: 5,
 };
 
 const TEMPLATES = [
   'classic',
-  'corporate',
   'minimal',
+  'basic-blue',
+  'mono',
+  'corporate',
+  'elegant',
+  'creative',
+  'sidebar',
+  'luxury',
+  'gradient',
+  'executive',
+  'signature',
+  'modern-pro',
+  'my-brand',
+  'design-studio',
   'modern',
   'gst',
   'premium',
@@ -73,9 +89,7 @@ function getAccountId(
 async function getOrCreateSettings(accountId: string) {
   try {
     await BusinessHubSettings.updateOne(
-      {
-        accountId,
-      },
+      { accountId },
       {
         $setOnInsert: {
           accountId,
@@ -123,15 +137,16 @@ function validImageReference(value: string): boolean {
 }
 
 function validateAndNormalizeSettings(
-  input: any,
+  input: unknown,
   current: any,
 ): {
-  value?: Record<string, string>;
+  value?: Record<string, unknown>;
   error?: string;
 } {
-  const body = input && typeof input === 'object'
-    ? input
-    : {};
+  const body =
+    input && typeof input === 'object' && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
 
   const merged = {
     ...DEFAULT_INVOICE_SETTINGS,
@@ -144,25 +159,19 @@ function validateAndNormalizeSettings(
   const printColor = cleanText(merged.printColor);
   const primaryColor = cleanText(merged.primaryColor);
 
-  if (
-    !(TEMPLATES as readonly string[]).includes(template)
-  ) {
+  if (!(TEMPLATES as readonly string[]).includes(template)) {
     return {
       error: 'Choose a valid invoice template.',
     };
   }
 
-  if (
-    !(PAGE_SIZES as readonly string[]).includes(pageSize)
-  ) {
+  if (!(PAGE_SIZES as readonly string[]).includes(pageSize)) {
     return {
       error: 'Choose a valid invoice page size.',
     };
   }
 
-  if (
-    !(PRINT_COLORS as readonly string[]).includes(printColor)
-  ) {
+  if (!(PRINT_COLORS as readonly string[]).includes(printColor)) {
     return {
       error: 'Choose a valid print color.',
     };
@@ -184,7 +193,7 @@ function validateAndNormalizeSettings(
     footer: 500,
   };
 
-  const value: Record<string, string> = {
+  const value: Record<string, unknown> = {
     template,
     pageSize,
     printColor,
@@ -203,7 +212,7 @@ function validateAndNormalizeSettings(
     value[field] = text;
   }
 
-  const email = value['email'];
+  const email = String(value['email'] || '');
 
   if (
     email &&
@@ -224,9 +233,41 @@ function validateAndNormalizeSettings(
 
   value['logoDataUrl'] = logoDataUrl;
 
-  return {
-    value,
-  };
+  const invoicePrefix = cleanText(
+    merged.invoicePrefix || DEFAULT_INVOICE_SETTINGS.invoicePrefix
+  )
+    .replace(/[^a-zA-Z0-9-]/g, '')
+    .slice(0, 20);
+
+  value['invoicePrefix'] =
+    invoicePrefix || DEFAULT_INVOICE_SETTINGS.invoicePrefix;
+
+  const invoiceStartNumber = Number(merged.invoiceStartNumber);
+  const invoiceNumberPadding = Number(merged.invoiceNumberPadding);
+
+  if (
+    !Number.isSafeInteger(invoiceStartNumber) ||
+    invoiceStartNumber < 1
+  ) {
+    return {
+      error: 'Invoice starting number must be a positive whole number.',
+    };
+  }
+
+  if (
+    !Number.isInteger(invoiceNumberPadding) ||
+    invoiceNumberPadding < 1 ||
+    invoiceNumberPadding > 12
+  ) {
+    return {
+      error: 'Invoice number padding must be between 1 and 12.',
+    };
+  }
+
+  value['invoiceStartNumber'] = invoiceStartNumber;
+  value['invoiceNumberPadding'] = invoiceNumberPadding;
+
+  return { value };
 }
 
 /**
@@ -293,9 +334,7 @@ router.patch(
       }
 
       const saved = await BusinessHubSettings.findOneAndUpdate(
-        {
-          accountId,
-        },
+        { accountId },
         {
           $set: {
             invoiceSettings: normalized.value,
