@@ -135,27 +135,15 @@ async function buildInvoiceLines(
   let gstTotal = 0;
 
   for (const raw of rawItems) {
+    const itemType = cleanText(raw?.itemType || 'stock') === 'custom'
+      ? 'custom'
+      : 'stock';
     const stockItemId = cleanText(raw?.stockItemId);
     const quantity = Number(raw?.quantity);
     const unitPrice = Number(raw?.unitPrice);
     const discountPercent = Number(raw?.discountPercent ?? 0);
 
-    if (!Types.ObjectId.isValid(stockItemId)) {
-      throw Object.assign(new Error('A product ID is invalid.'), {
-        status: 400,
-      });
-    }
-
-    if (seen.has(stockItemId)) {
-      throw Object.assign(
-        new Error('Each product can appear only once.'),
-        { status: 400 },
-      );
-    }
-
-    seen.add(stockItemId);
-
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1_000_000) {
       throw Object.assign(
         new Error('Quantity must be a positive whole number.'),
         { status: 400 },
@@ -183,69 +171,115 @@ async function buildInvoiceLines(
       );
     }
 
-    const query = BusinessHubStock.findOne({
-      _id: stockItemId,
-      accountId,
-    });
+    let name = '';
+    let description = '';
+    let sku = '';
+    let unit = '';
+    let gstEnabled = false;
+    let gstRate = 0;
+    let availableQuantity: number | undefined;
+    let normalizedStockId: Types.ObjectId | null = null;
 
-    if (session) {
-      query.session(session);
-    }
+    if (itemType === 'stock') {
+      if (!Types.ObjectId.isValid(stockItemId)) {
+        throw Object.assign(new Error('A product ID is invalid.'), {
+          status: 400,
+        });
+      }
 
-    const stock: any = await query.lean();
+      if (seen.has(stockItemId)) {
+        throw Object.assign(
+          new Error('Each stock product can appear only once.'),
+          { status: 400 },
+        );
+      }
+      seen.add(stockItemId);
 
-    if (!stock) {
-      throw Object.assign(
-        new Error('Selected product was not found in your stock.'),
-        { status: 404 },
-      );
-    }
+      const query = BusinessHubStock.findOne({
+        _id: stockItemId,
+        accountId,
+      });
+      if (session) query.session(session);
 
-    if (deductStock) {
-      const update = await BusinessHubStock.findOneAndUpdate(
-        {
-          _id: stockItemId,
-          accountId,
-          quantity: { $gte: quantity },
-        },
-        {
-          $inc: { quantity: -quantity },
-        },
-        {
-          returnDocument: 'after',
-          session,
-        },
-      ).lean();
+      const stock: any = await query.lean();
+      if (!stock) {
+        throw Object.assign(
+          new Error('Selected product was not found in your stock.'),
+          { status: 404 },
+        );
+      }
 
-      if (!update) {
+      if (deductStock) {
+        const update = await BusinessHubStock.findOneAndUpdate(
+          {
+            _id: stockItemId,
+            accountId,
+            quantity: { $gte: quantity },
+          },
+          { $inc: { quantity: -quantity } },
+          { returnDocument: 'after', session },
+        ).lean();
+
+        if (!update) {
+          throw Object.assign(
+            new Error(
+              `Insufficient stock for ${stock.name}. Refresh stock and try again.`,
+            ),
+            { status: 409 },
+          );
+        }
+      } else if (quantity > Number(stock.quantity)) {
         throw Object.assign(
           new Error(
-            `Insufficient stock for ${stock.name}. Refresh stock and try again.`,
+            `Insufficient stock for ${stock.name}. Available: ${stock.quantity} ${stock.unit}.`,
           ),
           { status: 409 },
         );
       }
-    } else if (quantity > Number(stock.quantity)) {
-      throw Object.assign(
-        new Error(
-          `Insufficient stock for ${stock.name}. Available: ${stock.quantity} ${stock.unit}.`,
-        ),
-        { status: 409 },
-      );
+
+      name = cleanText(stock.name);
+      description = cleanText(stock.description);
+      sku = cleanText(stock.sku);
+      unit = cleanText(stock.unit) || 'pcs';
+      gstEnabled = Boolean(stock.gstEnabled);
+      gstRate = gstEnabled ? Number(stock.gstRate) || 0 : 0;
+      availableQuantity = Number(stock.quantity) || 0;
+      normalizedStockId = new Types.ObjectId(stockItemId);
+    } else {
+      name = cleanText(raw?.name);
+      description = cleanText(raw?.description);
+      sku = cleanText(raw?.sku);
+      unit = cleanText(raw?.unit) || 'pcs';
+      gstEnabled = Boolean(raw?.gstEnabled);
+      gstRate = gstEnabled ? Number(raw?.gstRate ?? 0) : 0;
+
+      if (!name || name.length > 120) {
+        throw Object.assign(
+          new Error('Enter a name of 1 to 120 characters for each custom item.'),
+          { status: 400 },
+        );
+      }
+      if (description.length > 1000 || sku.length > 60 || unit.length > 30) {
+        throw Object.assign(
+          new Error('Custom item details exceed the allowed length.'),
+          { status: 400 },
+        );
+      }
+      if (
+        !Number.isFinite(gstRate) ||
+        gstRate < 0 ||
+        gstRate > 100
+      ) {
+        throw Object.assign(new Error('GST rate must be between 0 and 100%.'), {
+          status: 400,
+        });
+      }
     }
 
     const lineSubtotal = money(quantity * unitPrice);
-    const lineDiscount = money(
-      (lineSubtotal * discountPercent) / 100,
-    );
+    const lineDiscount = money((lineSubtotal * discountPercent) / 100);
     const taxable = money(lineSubtotal - lineDiscount);
-
-    const gstEnabled = Boolean(stock.gstEnabled);
-    const gstRate = gstEnabled ? Number(stock.gstRate) || 0 : 0;
-    const lineTax = gstEnabled
-      ? money((taxable * gstRate) / 100)
-      : 0;
-
+    const lineTax = gstEnabled ? money((taxable * gstRate) / 100) : 0;
     const lineTotal = money(taxable + lineTax);
 
     subtotal += lineSubtotal;
@@ -253,12 +287,13 @@ async function buildInvoiceLines(
     gstTotal += lineTax;
 
     items.push({
-      stockItemId: new Types.ObjectId(stockItemId),
-      name: stock.name,
-      description: stock.description ?? '',
-      sku: stock.sku ?? '',
+      itemType,
+      ...(normalizedStockId ? { stockItemId: normalizedStockId } : {}),
+      name,
+      description,
+      sku,
       quantity,
-      unit: stock.unit,
+      unit,
       unitPrice,
       discountPercent,
       gstEnabled,
@@ -267,17 +302,13 @@ async function buildInvoiceLines(
       lineDiscount,
       lineTax,
       lineTotal,
-      availableQuantity: Number(stock.quantity),
+      ...(availableQuantity !== undefined ? { availableQuantity } : {}),
     });
   }
 
   return {
     items,
-    calculation: calculateTotals(
-      subtotal,
-      discountTotal,
-      gstTotal,
-    ),
+    calculation: calculateTotals(subtotal, discountTotal, gstTotal),
   };
 }
 

@@ -13,7 +13,8 @@ const invoiceCustomerSchema = new Schema(
 
 const invoiceItemSchema = new Schema(
   {
-    stockItemId: { type: Schema.Types.ObjectId, required: true },
+    itemType: { type: String, enum: ['stock', 'custom'], default: 'stock', required: true },
+    stockItemId: { type: Schema.Types.ObjectId, default: null },
     name: { type: String, required: true, trim: true, maxlength: 120 },
     description: { type: String, trim: true, maxlength: 1000, default: '' },
     sku: { type: String, trim: true, maxlength: 60, default: '' },
