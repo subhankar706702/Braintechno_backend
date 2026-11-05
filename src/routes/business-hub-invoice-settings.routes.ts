@@ -50,6 +50,21 @@ const TEMPLATES = [
   'modern',
   'gst',
   'premium',
+  'ref-red-gold',
+  'ref-teal-clean',
+  'ref-green-classic',
+  'ref-proforma',
+  'ref-teal-wave',
+  'wave-corporate',
+  'green-minimal',
+  'navy-executive',
+  'royal-elegance',
+  'orange-creative',
+  'emerald-modern',
+  'slate-minimal',
+  'rose-premium',
+  'ocean-business',
+  'amber-luxe',
 ] as const;
 
 const PAGE_SIZES = [
